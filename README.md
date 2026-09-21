@@ -341,7 +341,7 @@ print 2 + 3
 
 ### Control Flow
 
-Blocks support three styles — pick the one you like:
+Blocks support three styles - pick the one you like:
 
 ```
 # Style 1: Curly braces (C/Java)
