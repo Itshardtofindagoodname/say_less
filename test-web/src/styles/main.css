@@ -1,0 +1,95 @@
+.glow-line {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #581cff, #00d2ff, #581cff, transparent);
+    opacity: 0;
+}
+
+.hero {
+    text-align: center;
+    position: relative;
+}
+
+.tagline {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    letter-spacing: 0.35em;
+    text-transform: uppercase;
+    color: #00d2ff;
+    margin-bottom: 1.5rem;
+    opacity: 0;
+}
+
+h1 {
+    opacity: 0;
+    animation: gradient-shift 6s ease infinite;
+}
+
+.subtitle {
+    font-size: 1.25rem;
+    font-weight: 300;
+    color: rgba(224, 224, 224, 0.5);
+    margin-top: 1.5rem;
+    opacity: 0;
+}
+
+.subtitle span {
+    color: #00d2ff;
+    font-weight: 500;
+}
+
+.cta-btn {
+    display: inline-block;
+    margin-top: 2.5rem;
+    padding: 0.85rem 2.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #0a0a0f;
+    background: linear-gradient(135deg, #00d2ff, #581cff);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    text-decoration: none;
+    opacity: 0;
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.cta-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px rgba(88, 28, 255, 0.4), 0 0 60px rgba(0, 210, 255, 0.15);
+}
+
+.particles {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: -1;
+}
+
+.particle {
+    position: absolute;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: rgba(88, 28, 255, 0.5);
+}
+
+.cursor-glow {
+    position: fixed;
+    width: 300px;
+    height: 300px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(88, 28, 255, 0.08), transparent 70%);
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    z-index: -1;
+}

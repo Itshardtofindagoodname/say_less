@@ -1,5 +1,6 @@
-name = "test-web"
+name = "project"
 version = "0.1.0"
 
 [dependencies]
+npm:gsap = "latest"
 http = "0.1"

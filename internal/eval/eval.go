@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"sayless/internal/parser"
@@ -263,6 +264,38 @@ func (interp *Interpreter) execBlock(block *parser.Block, env *Environment) (Val
 
 func (interp *Interpreter) startServer() error {
 	mux := http.NewServeMux()
+
+	staticDir := filepath.Join("src", "styles")
+	if _, err := os.Stat(staticDir); err == nil {
+		mux.HandleFunc("/styles/", func(w http.ResponseWriter, r *http.Request) {
+			fileName := strings.TrimPrefix(r.URL.Path, "/styles/")
+			filePath := filepath.Join(staticDir, fileName)
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			ext := filepath.Ext(fileName)
+			switch ext {
+			case ".css":
+				w.Header().Set("Content-Type", "text/css; charset=utf-8")
+			case ".js":
+				w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			case ".png":
+				w.Header().Set("Content-Type", "image/png")
+			case ".jpg", ".jpeg":
+				w.Header().Set("Content-Type", "image/jpeg")
+			case ".svg":
+				w.Header().Set("Content-Type", "image/svg+xml")
+			case ".json":
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			default:
+				w.Header().Set("Content-Type", "application/octet-stream")
+			}
+			w.Write(data)
+		})
+	}
+
 	for key, fn := range interp.routes {
 		parts := strings.SplitN(key, " ", 2)
 		method := parts[0]
@@ -283,6 +316,9 @@ func (interp *Interpreter) startServer() error {
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
+			}
+			if result.Type == "return" && result.Return != nil {
+				result = *result.Return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			fmt.Fprint(w, toString(result))

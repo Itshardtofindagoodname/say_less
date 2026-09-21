@@ -1,5 +1,5 @@
 name = "Say Less"
-age = 10
+age: int = 10
 active = true
 pi = 3.14
 

@@ -1,0 +1,37 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    min-height: 100vh;
+    background: #0a0a0f;
+    background-image:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(88, 28, 255, 0.15), transparent),
+        radial-gradient(ellipse 60% 40% at 80% 60%, rgba(0, 210, 255, 0.08), transparent);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Space Grotesk', sans-serif;
+    color: #e0e0e0;
+    overflow: hidden;
+}
+
+h1 {
+    font-size: clamp(3rem, 8vw, 7rem);
+    font-weight: 700;
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, #ffffff 0%, #c0c0ff 40%, #00d2ff 70%, #581cff 100%);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+@keyframes gradient-shift {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}

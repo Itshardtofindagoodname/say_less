@@ -202,8 +202,7 @@ use http
 server on 8080
 
 get "/"
-    return html
-        """
+    return """
         <!DOCTYPE html>
         <html>
         <head><title>Say Less Web App</title></head>
@@ -216,8 +215,7 @@ get "/"
 `)
 	writeFile(filepath.Join(name, "src", "pages", "index.sl"), `# Home Page
 fn render()
-    return html
-        """
+    return """
         <div class="hero">
             <h1>Welcome</h1>
         </div>
@@ -544,7 +542,19 @@ func cmdRemove(args []string) {
 		fmt.Fprintf(os.Stderr, "Usage: sale remove <package>\n")
 		os.Exit(1)
 	}
-	fmt.Printf("Removing package %s...\n", args[0])
+	pkg := args[0]
+	config := readSaleToml()
+	if config == nil {
+		fmt.Fprintf(os.Stderr, "Error: no sale.toml found in current directory\n")
+		os.Exit(1)
+	}
+	if _, ok := config[pkg]; !ok {
+		fmt.Fprintf(os.Stderr, "Error: package %s not found in dependencies\n", pkg)
+		os.Exit(1)
+	}
+	delete(config, pkg)
+	writeSaleToml(config)
+	fmt.Printf("Removed %s\n", pkg)
 }
 
 func cmdInstall(args []string) {
