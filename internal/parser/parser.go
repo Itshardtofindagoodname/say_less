@@ -14,6 +14,27 @@ type Parser struct {
 	errors []string
 }
 
+var htmlTags = map[string]bool{
+	"html": true, "head": true, "body": true, "title": true,
+	"meta": true, "link": true, "script": true, "style": true,
+	"div": true, "span": true, "p": true, "h1": true, "h2": true,
+	"h3": true, "h4": true, "h5": true, "h6": true,
+	"a": true, "img": true, "ul": true, "ol": true, "li": true,
+	"table": true, "tr": true, "td": true, "th": true,
+	"form": true, "input": true, "textarea": true, "select": true,
+	"option": true, "button": true, "label": true,
+	"header": true, "footer": true, "nav": true, "main": true,
+	"section": true, "article": true, "aside": true,
+	"strong": true, "em": true, "small": true, "code": true,
+	"pre": true, "blockquote": true, "br": true, "hr": true,
+	"canvas": true, "video": true, "audio": true, "source": true,
+	"svg": true, "path": true, "iframe": true,
+}
+
+func isHtmlTag(name string) bool {
+	return htmlTags[name]
+}
+
 func New(tokens []lexer.Token) *Parser {
 	return &Parser{tokens: tokens}
 }
@@ -138,6 +159,18 @@ func (p *Parser) statement() (ASTNode, error) {
 		return p.serverDecl()
 	case lexer.GET, lexer.POST, lexer.PUT, lexer.DELETE, lexer.PATCH:
 		return p.routeHandler()
+	case lexer.PAGE:
+		return p.pageDecl()
+	case lexer.COMPONENT:
+		return p.componentDecl()
+	case lexer.STATE:
+		return p.stateDecl()
+	case lexer.AWAIT:
+		return p.awaitStmt()
+	case lexer.TRY:
+		return p.tryCatch()
+	case lexer.THROW:
+		return p.throwStmt()
 	case lexer.MUT:
 		p.advance()
 		return p.exprOrAssign()
@@ -147,6 +180,18 @@ func (p *Parser) statement() (ASTNode, error) {
 	case lexer.LET:
 		p.advance()
 		return p.exprOrAssign()
+	}
+	// Check for HTML elements (identifiers that are known HTML tags)
+	if p.check(lexer.IDENT) && isHtmlTag(p.current().Value) {
+		return p.htmlElement()
+	}
+	// Check for event handlers (on click, on input, etc.)
+	if p.check(lexer.ON) {
+		return p.eventHandler()
+	}
+	// Check for style blocks
+	if p.check(lexer.STYLE) {
+		return p.styleBlock()
 	}
 	return p.exprOrAssign()
 }
@@ -313,6 +358,53 @@ func (p *Parser) blockNoDedent() (*Block, error) {
 	return block, nil
 }
 
+// webBlock parses a body block for page/component/event-handler declarations.
+// Unlike block(), it does NOT skip nested INDENT tokens — they are left for
+// htmlElement() to consume when parsing nested children.
+func (p *Parser) webBlock() (*Block, error) {
+	if p.check(lexer.LBRACE) {
+		return p.braceBlock()
+	}
+	if p.check(lexer.COLON) {
+		p.advance()
+	}
+	// Skip all newlines before the indented block
+	for p.check(lexer.NEWLINE) {
+		p.advance()
+	}
+	hadIndent := p.check(lexer.INDENT)
+	if hadIndent {
+		p.advance()
+	}
+	block := &Block{Pos: p.current()}
+	for !p.isAtEnd() {
+		if p.check(lexer.DEDENT) {
+			if hadIndent {
+				p.advance()
+			}
+			break
+		}
+		if p.check(lexer.RBRACE) {
+			break
+		}
+		if p.check(lexer.NEWLINE) {
+			p.advance()
+			continue
+		}
+		// Do NOT skip INDENT — leave for htmlElement() to consume
+		stmt, err := p.statement()
+		if err != nil {
+			p.errors = append(p.errors, err.Error())
+			p.skipToNextLine()
+			continue
+		}
+		if stmt != nil {
+			block.Stmts = append(block.Stmts, stmt)
+		}
+	}
+	return block, nil
+}
+
 func (p *Parser) structDef() (ASTNode, error) {
 	tok := p.advance()
 	name := p.advance().Value
@@ -411,6 +503,11 @@ func (p *Parser) returnStmt() (ASTNode, error) {
 func (p *Parser) useStmt() (ASTNode, error) {
 	tok := p.advance()
 	path := p.advance().Value
+	// Handle npm:foo, pip:foo style paths
+	for p.check(lexer.COLON) && p.peek(1).Type == lexer.IDENT {
+		p.advance() // consume colon
+		path += ":" + p.advance().Value
+	}
 	asName := ""
 	if p.match(lexer.AS) {
 		asName = p.advance().Value
@@ -812,4 +909,261 @@ func (p *Parser) serverDecl() (ASTNode, error) {
 		return nil, err
 	}
 	return &ServerDecl{Port: port, Pos: tok}, nil
+}
+
+func (p *Parser) pageDecl() (ASTNode, error) {
+	tok := p.advance()
+	route := ""
+	if p.check(lexer.STRING) {
+		route = p.advance().Value
+	}
+	body, err := p.webBlock()
+	if err != nil {
+		return nil, err
+	}
+	return &Page{Route: route, Body: body, Pos: tok}, nil
+}
+
+func (p *Parser) componentDecl() (ASTNode, error) {
+	tok := p.advance()
+	name := p.advance().Value
+	params, err := p.paramList()
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.webBlock()
+	if err != nil {
+		return nil, err
+	}
+	return &Component{Name: name, Params: params, Body: body, Pos: tok}, nil
+}
+
+func (p *Parser) stateDecl() (ASTNode, error) {
+	tok := p.advance()
+	name := p.advance().Value
+	if _, err := p.expect(lexer.ASSIGN); err != nil {
+		return nil, err
+	}
+	val, err := p.expression()
+	if err != nil {
+		return nil, err
+	}
+	return &State{Name: name, Value: val, Pos: tok}, nil
+}
+
+func (p *Parser) htmlElement() (ASTNode, error) {
+	tok := p.advance()
+	tag := tok.Value
+	var attrs []HtmlAttr
+	var children []ASTNode
+
+	// Parse attributes: class "foo", id "bar", etc.
+	for p.check(lexer.IDENT) && !p.check(lexer.NEWLINE) {
+		attrName := p.current().Value
+		if attrName == "on" || attrName == "style" {
+			break
+		}
+		if p.peek(1).Type == lexer.STRING || p.peek(1).Type == lexer.INT || p.peek(1).Type == lexer.IDENT || p.peek(1).Type == lexer.LBRACE {
+			p.advance()
+			val, err := p.expression()
+			if err != nil {
+				return nil, err
+			}
+			attrs = append(attrs, HtmlAttr{Name: attrName, Value: val})
+		} else {
+			break
+		}
+	}
+
+	// Check for inline text content on same line
+	if !p.check(lexer.NEWLINE) && !p.check(lexer.EOF) && !p.check(lexer.INDENT) {
+		textExpr, err := p.expression()
+		if err == nil {
+			children = append(children, &TextInterp{Parts: []ASTNode{textExpr}, Pos: p.current()})
+		}
+	}
+
+	// If no newline follows, the element is complete (self-closing)
+	if !p.check(lexer.NEWLINE) {
+		return &HtmlElement{Tag: tag, Attributes: attrs, Children: children, Pos: tok}, nil
+	}
+
+	// Consume newlines and blank lines, then check for children block
+	p.advance()
+	for p.check(lexer.NEWLINE) {
+		p.advance()
+	}
+	if !p.check(lexer.INDENT) {
+		return &HtmlElement{Tag: tag, Attributes: attrs, Children: children, Pos: tok}, nil
+	}
+
+	// Consume INDENT and parse children until DEDENT
+	p.advance()
+	for !p.check(lexer.DEDENT) && !p.isAtEnd() {
+		if p.check(lexer.NEWLINE) {
+			p.advance()
+			continue
+		}
+		if p.check(lexer.ON) {
+			evt, err := p.eventHandler()
+			if err != nil {
+				p.errors = append(p.errors, err.Error())
+				p.skipToNextLine()
+				continue
+			}
+			children = append(children, evt)
+			continue
+		}
+		if p.check(lexer.STYLE) {
+			style, err := p.styleBlock()
+			if err != nil {
+				p.errors = append(p.errors, err.Error())
+				p.skipToNextLine()
+				continue
+			}
+			children = append(children, style)
+			continue
+		}
+		if p.check(lexer.IDENT) && isHtmlTag(p.current().Value) {
+			child, err := p.htmlElement()
+			if err != nil {
+				p.errors = append(p.errors, err.Error())
+				p.skipToNextLine()
+				continue
+			}
+			children = append(children, child)
+			continue
+		}
+		stmt, err := p.statement()
+		if err != nil {
+			p.errors = append(p.errors, err.Error())
+			p.skipToNextLine()
+			continue
+		}
+		if stmt != nil {
+			children = append(children, stmt)
+		}
+	}
+	if p.check(lexer.DEDENT) {
+		p.advance()
+	}
+
+	return &HtmlElement{Tag: tag, Attributes: attrs, Children: children, Pos: tok}, nil
+}
+
+func (p *Parser) eventHandler() (ASTNode, error) {
+	tok := p.advance() // consume 'on'
+	event := p.advance().Value
+	body, err := p.webBlock()
+	if err != nil {
+		return nil, err
+	}
+	return &EventHandler{Event: event, Body: body, Pos: tok}, nil
+}
+
+func (p *Parser) styleBlock() (ASTNode, error) {
+	tok := p.advance() // consume 'style'
+	var props []StyleProp
+
+	// Parse on same line
+	if !p.check(lexer.NEWLINE) && !p.check(lexer.EOF) {
+		// Inline style properties
+		for {
+			if p.check(lexer.NEWLINE) || p.check(lexer.EOF) || p.check(lexer.DEDENT) {
+				break
+			}
+			propName := ""
+			if p.check(lexer.IDENT) {
+				propName = p.advance().Value
+			} else {
+				break
+			}
+			if _, err := p.expect(lexer.COLON); err != nil {
+				break
+			}
+			propVal, err := p.expression()
+			if err != nil {
+				break
+			}
+			props = append(props, StyleProp{Name: propName, Value: propVal})
+			if !p.match(lexer.COMMA) {
+				break
+			}
+		}
+		return &StyleBlock{Properties: props, Pos: tok}, nil
+	}
+
+	// Parse indented block
+	if p.check(lexer.NEWLINE) {
+		p.advance()
+		if p.check(lexer.INDENT) {
+			p.advance()
+			for !p.check(lexer.DEDENT) && !p.isAtEnd() {
+				if p.check(lexer.NEWLINE) {
+					p.advance()
+					continue
+				}
+				if p.check(lexer.IDENT) {
+					propName := p.advance().Value
+					if p.check(lexer.COLON) {
+						p.advance() // consume colon
+						propVal, err := p.expression()
+						if err != nil {
+							p.skipToNextLine()
+							continue
+						}
+						props = append(props, StyleProp{Name: propName, Value: propVal})
+					}
+				} else {
+					p.skipToNextLine()
+				}
+			}
+			if p.check(lexer.DEDENT) {
+				p.advance()
+			}
+		}
+	}
+
+	return &StyleBlock{Properties: props, Pos: tok}, nil
+}
+
+func (p *Parser) awaitStmt() (ASTNode, error) {
+	tok := p.advance()
+	expr, err := p.expression()
+	if err != nil {
+		return nil, err
+	}
+	return &AwaitExpr{Value: expr, Pos: tok}, nil
+}
+
+func (p *Parser) tryCatch() (ASTNode, error) {
+	tok := p.advance()
+	tryBody, err := p.block()
+	if err != nil {
+		return nil, err
+	}
+	p.skipNewlines()
+	catchVar := "error"
+	if p.check(lexer.CATCH) {
+		p.advance()
+		if p.check(lexer.IDENT) {
+			catchVar = p.advance().Value
+		}
+	} else {
+		return nil, fmt.Errorf("line %d: expected 'catch' after 'try' block", tok.Line)
+	}
+	catchBody, err := p.block()
+	if err != nil {
+		return nil, err
+	}
+	return &TryCatch{TryBody: tryBody, CatchVar: catchVar, CatchBody: catchBody, Pos: tok}, nil
+}
+
+func (p *Parser) throwStmt() (ASTNode, error) {
+	tok := p.advance()
+	val, err := p.expression()
+	if err != nil {
+		return nil, err
+	}
+	return &Throw{Value: val, Pos: tok}, nil
 }

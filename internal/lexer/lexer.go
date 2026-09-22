@@ -83,6 +83,17 @@ const (
 	PATCH    // patch
 	ON       // on
 	SERVER   // server
+
+	// Web tokens
+	PAGE      // page
+	COMPONENT // component
+	STATE     // state
+	STYLE     // style
+	AWAIT     // await
+	TRY       // try
+	CATCH     // catch
+	THROW     // throw
+
 	NEWLINE
 	INDENT
 	DEDENT
@@ -122,6 +133,14 @@ var keywords = map[string]TokenType{
 	"patch":     PATCH,
 	"on":        ON,
 	"server":    SERVER,
+	"page":      PAGE,
+	"component": COMPONENT,
+	"state":     STATE,
+	"style":     STYLE,
+	"await":     AWAIT,
+	"try":       TRY,
+	"catch":     CATCH,
+	"throw":     THROW,
 	"true":      TRUE,
 	"false":     FALSE,
 	"none":      NONE,
@@ -145,6 +164,8 @@ var tokenNames = map[TokenType]string{
 	LET: "let", MUT: "mut", CONST: "const", MATCH: "match", WHEN: "when",
 	SELF: "self", GET: "get", POST: "post", PUT: "put", DELETE: "delete",
 	PATCH: "patch", ON: "on", SERVER: "server",
+	PAGE: "page", COMPONENT: "component", STATE: "state", STYLE: "style",
+	AWAIT: "await", TRY: "try", CATCH: "catch", THROW: "throw",
 	NEWLINE: "NEWLINE", INDENT: "INDENT", DEDENT: "DEDENT", EOF: "EOF",
 }
 

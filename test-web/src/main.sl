@@ -1,6 +1,7 @@
 # Web Application
 use http
 use env
+use npm:gsap
 
 server on 8080
 
@@ -30,7 +31,6 @@ get "/"
                 <a href="#" class="cta-btn" id="cta">Get Started</a>
             </div>
 
-            <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
             <script>
                 const tl = gsap.timeline({ defaults: { ease: "power3.out" } });
 

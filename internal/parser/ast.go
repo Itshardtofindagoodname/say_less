@@ -37,6 +37,18 @@ const (
 	NodeFnLiteral
 	NodeRouteHandler
 	NodeServerDecl
+
+	// Web nodes
+	NodePage
+	NodeComponent
+	NodeState
+	NodeHtmlElement
+	NodeEventHandler
+	NodeStyleBlock
+	NodeAwaitExpr
+	NodeTryCatch
+	NodeThrow
+	NodeTextInterp
 )
 
 type ASTNode interface {
@@ -351,3 +363,102 @@ type ServerDecl struct {
 
 func (s *ServerDecl) Type() NodeType      { return NodeServerDecl }
 func (s *ServerDecl) Position() lexer.Token { return s.Pos }
+
+type Page struct {
+	Route string
+	Body  *Block
+	Pos   lexer.Token
+}
+
+func (p *Page) Type() NodeType      { return NodePage }
+func (p *Page) Position() lexer.Token { return p.Pos }
+
+type Component struct {
+	Name   string
+	Params []Param
+	Body   *Block
+	Pos    lexer.Token
+}
+
+func (c *Component) Type() NodeType      { return NodeComponent }
+func (c *Component) Position() lexer.Token { return c.Pos }
+
+type State struct {
+	Name  string
+	Value ASTNode
+	Pos   lexer.Token
+}
+
+func (s *State) Type() NodeType      { return NodeState }
+func (s *State) Position() lexer.Token { return s.Pos }
+
+type HtmlElement struct {
+	Tag        string
+	Attributes []HtmlAttr
+	Children   []ASTNode
+	Pos        lexer.Token
+}
+
+func (h *HtmlElement) Type() NodeType      { return NodeHtmlElement }
+func (h *HtmlElement) Position() lexer.Token { return h.Pos }
+
+type HtmlAttr struct {
+	Name  string
+	Value ASTNode
+}
+
+type EventHandler struct {
+	Event string
+	Body  *Block
+	Pos   lexer.Token
+}
+
+func (e *EventHandler) Type() NodeType      { return NodeEventHandler }
+func (e *EventHandler) Position() lexer.Token { return e.Pos }
+
+type StyleBlock struct {
+	Properties []StyleProp
+	Pos        lexer.Token
+}
+
+type StyleProp struct {
+	Name  string
+	Value ASTNode
+}
+
+func (s *StyleBlock) Type() NodeType      { return NodeStyleBlock }
+func (s *StyleBlock) Position() lexer.Token { return s.Pos }
+
+type AwaitExpr struct {
+	Value ASTNode
+	Pos   lexer.Token
+}
+
+func (a *AwaitExpr) Type() NodeType      { return NodeAwaitExpr }
+func (a *AwaitExpr) Position() lexer.Token { return a.Pos }
+
+type TryCatch struct {
+	TryBody     *Block
+	CatchVar    string
+	CatchBody   *Block
+	Pos         lexer.Token
+}
+
+func (t *TryCatch) Type() NodeType      { return NodeTryCatch }
+func (t *TryCatch) Position() lexer.Token { return t.Pos }
+
+type Throw struct {
+	Value ASTNode
+	Pos   lexer.Token
+}
+
+func (t *Throw) Type() NodeType      { return NodeThrow }
+func (t *Throw) Position() lexer.Token { return t.Pos }
+
+type TextInterp struct {
+	Parts []ASTNode
+	Pos   lexer.Token
+}
+
+func (t *TextInterp) Type() NodeType      { return NodeTextInterp }
+func (t *TextInterp) Position() lexer.Token { return t.Pos }

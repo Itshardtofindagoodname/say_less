@@ -12,7 +12,6 @@ fn render()
             <p>The <span class="accent underline-reveal">Say Less</span> way to build.</p>
         </div>
 
-        <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
         <script>
             gsap.fromTo("#page-title",
                 { y: 40, opacity: 0, scale: 0.9 },

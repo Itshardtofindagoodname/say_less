@@ -3,12 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"sayless/internal/eval"
 	"sayless/internal/lexer"
 	"sayless/internal/parser"
+	"sayless/internal/web"
 )
 
 const VERSION = "0.1.0"
@@ -71,21 +73,21 @@ Usage: sale <command> [options]
 
 Core Commands:
   run <file>          Run a Say Less file
-  build [--release]   Build project
-  dev                 Start development server
+  build [--release]   Build project (supports web compilation)
+  dev                 Start development server (supports web mode)
   test                Run tests
 
 Project Commands:
   new <name>          Create new empty project
-  create --web <name>     Create web project
+  create --web <name>     Create web project (Say Less Web)
   create --backend <name> Create backend project
   create --system <name>  Create system project
   init                Initialize project in current directory
 
 Package Commands:
-  add <package>       Add a dependency
+  add <package>       Add a dependency (npm:<name>, pip:<name>, or built-in)
   remove <package>    Remove a dependency
-  install             Install dependencies
+  install             Install all dependencies from sale.toml
 
 Tooling Commands:
   fmt [file]          Format source files
@@ -96,7 +98,12 @@ Tooling Commands:
 
 Options:
   --version, -v       Show version
-  --help, -h          Show this help`)
+  --help, -h          Show this help
+
+Say Less Web:
+  Write interactive websites without HTML, CSS, or JavaScript.
+  Use 'page' and 'component' declarations for web features.
+  The compiler generates optimized output automatically.`)
 }
 
 func cmdRun(args []string) {
@@ -126,12 +133,54 @@ func runSource(source string, filename string) {
 		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Check if this is a web program (has page or component declarations)
+	if isWebProgram(program) {
+		runWebProgram(program, filename)
+		return
+	}
+
 	interp := eval.New()
 	err = interp.Run(program)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Runtime error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func isWebProgram(program *parser.Program) bool {
+	for _, stmt := range program.Stmts {
+		switch stmt.(type) {
+		case *parser.Page, *parser.Component:
+			return true
+		}
+	}
+	return false
+}
+
+func runWebProgram(program *parser.Program, filename string) {
+	compiler := web.NewCompiler()
+	output, err := compiler.Compile(program)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Web compilation error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Create build directory
+	os.MkdirAll("build", 0755)
+	os.MkdirAll("build/web", 0755)
+
+	// Write output files
+	writeFile("build/web/index.html", output.HTML)
+	if output.CSS != "" {
+		writeFile("build/web/styles.css", output.CSS)
+	}
+	if output.JS != "" {
+		writeFile("build/web/runtime.js", output.JS)
+	}
+
+	fmt.Println("Web build successful!")
+	fmt.Printf("Output: build/web/index.html\n")
 }
 
 func cmdNew(args []string) {
@@ -196,30 +245,45 @@ func createWebProject(name string) {
 	for _, d := range dirs {
 		os.MkdirAll(d, 0755)
 	}
-	writeFile(filepath.Join(name, "src", "main.sl"), `# Web Application
-use http
+	writeFile(filepath.Join(name, "src", "main.sl"), fmt.Sprintf(`# %s - Say Less Web Application
+# Run with: sale dev
 
-server on 8080
+page "/"
 
-get "/"
-    return """
-        <!DOCTYPE html>
-        <html>
-        <head><title>Say Less Web App</title></head>
-        <body>
-            <h1>Hello from Say Less!</h1>
-            <p>Build more. Say less.</p>
-        </body>
-        </html>
-        """
+    state count = 0
+
+    main
+
+        h1 "Welcome to %s"
+
+        p "Built with Say Less Web - no HTML, CSS, or JavaScript required."
+
+        button "Click me"
+            on click
+                count += 1
+
+        p "Clicked: " + count
+`, name, name))
+	writeFile(filepath.Join(name, "src", "components", "card.sl"), `# Card Component
+
+component Card(title, description)
+
+    article class "card"
+
+        h2 title
+        p description
 `)
-	writeFile(filepath.Join(name, "src", "pages", "index.sl"), `# Home Page
-fn render()
-    return """
-        <div class="hero">
-            <h1>Welcome</h1>
-        </div>
-        """
+	writeFile(filepath.Join(name, "src", "pages", "about.sl"), `# About Page
+
+page "/about"
+
+    main
+
+        h1 "About"
+
+        p "This is a Say Less Web application."
+
+        a href "/" "Go home"
 `)
 	writeFile(filepath.Join(name, "sale.toml"), fmt.Sprintf(`name = "%s"
 version = "0.1.0"
@@ -252,6 +316,25 @@ services:
 ## Docker
 
     docker compose up --build
+
+## What is Say Less Web?
+
+Say Less Web lets you build interactive websites without writing HTML, CSS, or JavaScript.
+Just write Say Less and the compiler handles everything else.
+
+### Example
+
+`+"```"+`
+page "/"
+
+    state count = 0
+
+    main
+        h1 "Counter"
+        button "Click: " + count
+            on click
+                count += 1
+`+"```"+`
 `, name))
 	fmt.Printf("Created web project '%s'\n", name)
 	fmt.Printf("  cd %s\n", name)
@@ -392,16 +475,37 @@ func cmdBuild(args []string) {
 		os.Exit(1)
 	}
 	p := parser.New(tokens)
-	_, err = p.Parse()
+	program, err := p.Parse()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("Build successful.")
+
+	// Check if this is a web program
+	if isWebProgram(program) {
+		compiler := web.NewCompiler()
+		output, err := compiler.Compile(program)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Web compilation error: %v\n", err)
+			os.Exit(1)
+		}
+		os.MkdirAll("build/web", 0755)
+		writeFile("build/web/index.html", output.HTML)
+		if output.CSS != "" {
+			writeFile("build/web/styles.css", output.CSS)
+		}
+		if output.JS != "" {
+			writeFile("build/web/runtime.js", output.JS)
+		}
+		fmt.Println("Web build successful!")
+		fmt.Printf("Output: build/web/index.html\n")
+	} else {
+		fmt.Println("Build successful.")
+	}
 }
 
 func cmdDev(args []string) {
-	fmt.Println("Starting development server...")
+	fmt.Println("Starting Say Less development server...")
 	mainFile := findMainFile()
 	if mainFile == "" {
 		fmt.Fprintf(os.Stderr, "No main.sl found. Create src/main.sl first.\n")
@@ -410,14 +514,51 @@ func cmdDev(args []string) {
 	fmt.Printf("Watching %s for changes...\n", filepath.Dir(mainFile))
 	fmt.Println("Development server running on http://localhost:8080")
 	fmt.Println("Press Ctrl+C to stop.")
-	for {
-		data, err := os.ReadFile(mainFile)
+
+	// Initial build
+	data, err := os.ReadFile(mainFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return
+	}
+	l := lexer.New(string(data), mainFile)
+	tokens, err := l.Tokenize()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Lexer error: %v\n", err)
+		return
+	}
+	p := parser.New(tokens)
+	program, err := p.Parse()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
+		return
+	}
+
+	if isWebProgram(program) {
+		// Web development mode
+		compiler := web.NewCompiler()
+		output, err := compiler.Compile(program)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			continue
+			fmt.Fprintf(os.Stderr, "Web compilation error: %v\n", err)
+			return
 		}
-		runSource(string(data), mainFile)
-		fmt.Println("Rebuilding...")
+		os.MkdirAll("build/web", 0755)
+		writeFile("build/web/index.html", output.HTML)
+		if output.CSS != "" {
+			writeFile("build/web/styles.css", output.CSS)
+		}
+		if output.JS != "" {
+			writeFile("build/web/runtime.js", output.JS)
+		}
+		fmt.Println("Build successful! Serving on http://localhost:8080")
+		// TODO: Start file watcher and HTTP server
+	} else {
+		// Traditional interpreter mode
+		interp := eval.New()
+		err = interp.Run(program)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Runtime error: %v\n", err)
+		}
 	}
 }
 
@@ -524,6 +665,9 @@ func cmdRepl() {
 func cmdAdd(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintf(os.Stderr, "Usage: sale add <package>\n")
+		fmt.Fprintf(os.Stderr, "  npm:<name>  - Add an npm package\n")
+		fmt.Fprintf(os.Stderr, "  pip:<name>  - Add a pip package\n")
+		fmt.Fprintf(os.Stderr, "  <name>      - Add a built-in module\n")
 		os.Exit(1)
 	}
 	pkg := args[0]
@@ -560,11 +704,48 @@ func cmdRemove(args []string) {
 func cmdInstall(args []string) {
 	fmt.Println("Installing dependencies...")
 	config := readSaleToml()
-	if config != nil {
-		for pkg, ver := range config {
-			fmt.Printf("  %s@%s\n", pkg, ver)
+	if config == nil {
+		fmt.Println("No sale.toml found or no dependencies declared.")
+		return
+	}
+
+	var npmPkgs, pipPkgs, builtInPkgs []string
+	for pkg := range config {
+		if strings.HasPrefix(pkg, "npm:") {
+			npmPkgs = append(npmPkgs, strings.TrimPrefix(pkg, "npm:"))
+		} else if strings.HasPrefix(pkg, "pip:") {
+			pipPkgs = append(pipPkgs, strings.TrimPrefix(pkg, "pip:"))
+		} else {
+			builtInPkgs = append(builtInPkgs, pkg)
 		}
 	}
+
+	for _, pkg := range builtInPkgs {
+		fmt.Printf("  %s (built-in)\n", pkg)
+	}
+
+	if len(npmPkgs) > 0 {
+		fmt.Printf("Installing %d npm package(s)...\n", len(npmPkgs))
+		cmd := exec.Command("npm", append([]string{"install"}, npmPkgs...)...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "npm install failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	if len(pipPkgs) > 0 {
+		fmt.Printf("Installing %d pip package(s)...\n", len(pipPkgs))
+		cmd := exec.Command("pip", append([]string{"install"}, pipPkgs...)...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "pip install failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	fmt.Println("Done.")
 }
 
@@ -724,7 +905,7 @@ func writeSaleToml(config map[string]string) {
 	sb.WriteString("version = \"0.1.0\"\n\n")
 	if len(config) > 0 {
 		sb.WriteString("[dependencies]\n")
-		for pkg, ver := range config {
+	for pkg, ver := range config {
 			sb.WriteString(fmt.Sprintf("%s = \"%s\"\n", pkg, ver))
 		}
 	}
