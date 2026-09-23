@@ -70,6 +70,27 @@ sale --version
 sale --help
 ```
 
+#### Uninstall (Windows)
+
+To remove Say Less — its files, the `sale` command, and its PATH entries — run:
+
+```powershell
+sale -g uninstall
+```
+
+The command:
+
+- Deletes the install directory (`C:\Program Files\SayLess` and/or `%LOCALAPPDATA%\Programs\SayLess`)
+- Removes the Say Less `bin` folder from the system and user PATH
+- Asks for administrator permission (UAC) automatically when system-level changes are needed
+- Deletes the running copy once the command finishes
+
+Then close and reopen the terminal and confirm the command is gone:
+
+```powershell
+Get-Command sale -ErrorAction SilentlyContinue   # should return nothing
+```
+
 ### Option 2: Build from source
 
 Requires [Go](https://go.dev/dl/) 1.21 or later.
@@ -324,6 +345,7 @@ sale doctor
 |--------|-------------|
 | `sale --version`, `-v` | Print the version number |
 | `sale --help`, `-h` | Print the help message |
+| `sale -g uninstall` | Uninstall Say Less from your system (removes files and PATH entries) |
 
 ## Language Overview
 

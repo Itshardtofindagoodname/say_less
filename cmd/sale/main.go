@@ -56,6 +56,15 @@ func main() {
 		cmdClean(args)
 	case "doctor":
 		cmdDoctor()
+	case "-g":
+		if len(args) > 0 && args[0] == "uninstall" {
+			cmdUninstall()
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Global command not supported: %s\n", strings.Join(args, " "))
+		os.Exit(1)
+	case "uninstall":
+		cmdUninstall()
 	case "--version", "-v":
 		fmt.Printf("sale %s\n", VERSION)
 	case "--help", "-h":
@@ -100,6 +109,8 @@ Tooling Commands:
 Options:
   --version, -v       Show version
   --help, -h          Show this help
+  -g uninstall        Remove Say Less and the sale command from this system
+                      (Windows; the running copy is deleted automatically)
 
 Say Less Web:
   Write interactive websites without HTML, CSS, or JavaScript.
