@@ -12,6 +12,7 @@ Download the latest release for your platform from the [Releases](https://github
 
 | Platform | File |
 |----------|------|
+| Windows (x64) installer | `say_less.exe` |
 | Windows (x64) | `sale-windows-amd64.zip` |
 | macOS (Intel) | `sale-macos-amd64.tar.gz` |
 | macOS (Apple Silicon) | `sale-macos-arm64.tar.gz` |
@@ -20,9 +21,22 @@ Download the latest release for your platform from the [Releases](https://github
 
 Each release zip includes an installer script.
 
-#### Windows
+#### Windows — GUI installer (recommended)
 
-1. Extract the zip file.
+1. Download **`say_less.exe`** from the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
+2. Double-click **`say_less.exe`**.
+3. A setup window opens, just like the Python installer. Keep **Add `sale` to your PATH** checked (recommended) and click **Install**.
+4. The installer copies `sale.exe` to your chosen location and adds it to your PATH automatically.
+5. Open a new terminal and verify:
+
+```powershell
+sale --version
+# sale 0.1.0
+```
+
+#### Windows — zip + install.bat
+
+1. Extract `sale-windows-amd64.zip`.
 2. Right-click `install.bat` and select **Run as administrator**.
 3. The installer copies `sale.exe` to `C:\Program Files\SayLess\bin\` and adds it to your system PATH.
 

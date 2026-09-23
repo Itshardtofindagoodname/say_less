@@ -11,6 +11,16 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+echo Building Windows installer (say_less.exe)...
+copy /Y dist\sale-windows-amd64.exe cmd\installer\sale.exe >nul
+go build -tags saylesspayload -ldflags "-H=windowsgui -s -w" -o dist/say_less.exe ./cmd/installer
+if %errorlevel% neq 0 (
+    echo Failed to build Windows installer
+    exit /b 1
+)
+del cmd\installer\sale.exe
+echo say_less.exe built successfully
+
 set GOOS=darwin
 set GOARCH=amd64
 echo Building macOS amd64...

@@ -496,7 +496,7 @@ func TestCompilerNestedWithEvents(t *testing.T) {
 		t.Error("Expected non-empty HTML output")
 	}
 
-	if !strings.Contains(output.HTML, "<button>") {
+	if !strings.Contains(output.HTML, "<button") {
 		t.Error("Expected <button> element")
 	}
 
@@ -537,5 +537,38 @@ func TestMultiplePages(t *testing.T) {
 	}
 	if page2.Route != "/about" {
 		t.Errorf("Expected second page route '/about', got '%s'", page2.Route)
+	}
+}
+
+func TestCompilerConditionalRuntime(t *testing.T) {
+	source := "page \"/\"\n    state showDetails = false\n    section\n        h2 \"Conditional Content\"\n        button \"Toggle Details\"\n            on click\n                showDetails = not showDetails\n        if showDetails\n            p \"shown when on\"\n        else\n            p \"hidden until toggled\"\n"
+	l := lexer.New(source, "test.sl")
+	tokens, err := l.Tokenize()
+	if err != nil {
+		t.Fatalf("Lexer error: %v", err)
+	}
+
+	p := parser.New(tokens)
+	program, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	compiler := NewCompiler()
+	output, err := compiler.Compile(program)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+
+	if !strings.Contains(output.HTML, "if showDetails") {
+		t.Error("Expected conditional marker in HTML output")
+	}
+
+	if !strings.Contains(output.JS, "renderConditionals") {
+		t.Error("Expected renderConditionals in runtime JS")
+	}
+
+	if !strings.Contains(output.JS, `"showDetails":false`) {
+		t.Error("Expected showDetails state init in runtime JS")
 	}
 }

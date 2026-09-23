@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -10,6 +11,7 @@ type Generator struct {
 	ir           *WebIR
 	componentIDs map[string]string
 	stateVars    map[string]bool
+	stateInit    map[string]string
 	scriptParts  []string
 	styleParts   []string
 }
@@ -20,6 +22,7 @@ func NewGenerator(ir *WebIR) *Generator {
 		ir:           ir,
 		componentIDs: make(map[string]string),
 		stateVars:    make(map[string]bool),
+		stateInit:    make(map[string]string),
 		scriptParts:  make([]string, 0),
 		styleParts:   make([]string, 0),
 	}
@@ -71,6 +74,7 @@ func (g *Generator) collectState(nodes []IRNode) {
 		switch n := node.(type) {
 		case *IRState:
 			g.stateVars[n.Name] = true
+			g.stateInit[n.Name] = n.InitialValue
 		case *IRElement:
 			g.collectState(n.Children)
 		case *IRConditional:
@@ -100,7 +104,7 @@ func (g *Generator) generateNode(node IRNode) string {
 	case *IRInterp:
 		return g.generateInterp(n)
 	case *IRBinding:
-		return fmt.Sprintf("{{%s}}", n.Expr)
+		return fmt.Sprintf(`<span data-sl-expr="%s"></span>`, escapeHTML(n.Expr))
 	case *IRElement:
 		return g.generateElement(n)
 	case *IRComponent:
@@ -137,47 +141,51 @@ func (g *Generator) generateInterp(interp *IRInterp) string {
 }
 
 func (g *Generator) generateElement(elem *IRElement) string {
-	var attrs []string
-	for _, attr := range elem.Attributes {
-		if attr.IsExpr {
-			attrs = append(attrs, fmt.Sprintf(`%s="%s"`, attr.Name, escapeHTML(attr.Value)))
-		} else {
-			attrs = append(attrs, fmt.Sprintf(`%s="%s"`, attr.Name, escapeHTML(attr.Value)))
-		}
-	}
-
-	// Add data bindings for state variables
-	if g.needsReactivity(elem) {
-		attrs = append(attrs, `data-reactive="true"`)
-	}
-
-	attrStr := ""
-	if len(attrs) > 0 {
-		attrStr = " " + strings.Join(attrs, " ")
-	}
-
-	// Self-closing tags
+	// Self-closing tags (no children, no event handlers)
 	selfClosing := map[string]bool{
 		"br": true, "hr": true, "img": true, "input": true,
 		"meta": true, "link": true, "source": true, "path": true,
 	}
 	if selfClosing[elem.Tag] {
+		var attrs []string
+		for _, attr := range elem.Attributes {
+			attrs = append(attrs, fmt.Sprintf(`%s="%s"`, attr.Name, escapeHTML(attr.Value)))
+		}
+		attrStr := ""
+		if len(attrs) > 0 {
+			attrStr = " " + strings.Join(attrs, " ")
+		}
 		return fmt.Sprintf("<%s%s />", elem.Tag, attrStr)
 	}
 
+	// Children first (events are rendered as attributes, not content)
 	var children []string
+	var events []*IREvent
 	for _, child := range elem.Children {
+		if evt, ok := child.(*IREvent); ok {
+			events = append(events, evt)
+			continue
+		}
 		childStr := g.generateNode(child)
 		if childStr != "" {
 			children = append(children, childStr)
 		}
 	}
 
-	// Add event handlers as attributes
-	for _, child := range elem.Children {
-		if evt, ok := child.(*IREvent); ok {
-			attrs = append(attrs, fmt.Sprintf(`data-on-%s="%s"`, evt.Name, escapeHTML(evt.Handler)))
-		}
+	// Then attributes: static attrs, reactivity marker, event handlers
+	var attrs []string
+	for _, attr := range elem.Attributes {
+		attrs = append(attrs, fmt.Sprintf(`%s="%s"`, attr.Name, escapeHTML(attr.Value)))
+	}
+	if g.needsReactivity(elem) {
+		attrs = append(attrs, `data-reactive="true"`)
+	}
+	for _, evt := range events {
+		attrs = append(attrs, fmt.Sprintf(`data-on-%s="%s"`, evt.Name, escapeHTML(evt.Handler)))
+	}
+	attrStr := ""
+	if len(attrs) > 0 {
+		attrStr = " " + strings.Join(attrs, " ")
 	}
 
 	content := strings.Join(children, "\n")
@@ -220,6 +228,7 @@ func (g *Generator) generateAwait(await *IRAwait) string {
 
 func (g *Generator) generateState(state *IRState) string {
 	g.stateVars[state.Name] = true
+	g.stateInit[state.Name] = state.InitialValue
 	return fmt.Sprintf(`<!-- state %s = %s -->`, state.Name, state.InitialValue)
 }
 
@@ -246,13 +255,28 @@ func (g *Generator) generateComponentCSS(comp *ComponentNode) {
 }
 
 func (g *Generator) needsReactivity(elem *IRElement) bool {
-	// Check if element contains state variable references
 	for _, child := range elem.Children {
-		if text, ok := child.(*IRText); ok {
-			for stateVar := range g.stateVars {
-				if strings.Contains(text.Content, stateVar) {
-					return true
-				}
+		if g.nodeIsReactive(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Generator) nodeIsReactive(node IRNode) bool {
+	switch n := node.(type) {
+	case *IRBinding:
+		return true
+	case *IRInterp:
+		for _, part := range n.Parts {
+			if g.nodeIsReactive(part) {
+				return true
+			}
+		}
+	case *IRElement:
+		for _, child := range n.Children {
+			if g.nodeIsReactive(child) {
+				return true
 			}
 		}
 	}
@@ -260,105 +284,149 @@ func (g *Generator) needsReactivity(elem *IRElement) bool {
 }
 
 func (g *Generator) generateRuntime() string {
-	return `<script>
+	names := make([]string, 0, len(g.stateInit))
+	for name := range g.stateInit {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%q:%s", name, g.stateInit[name]))
+	}
+	stateObj := "{" + strings.Join(parts, ",") + "}"
+
+	return fmt.Sprintf(`<script>
 (function() {
   'use strict';
-  
-  // Say Less Web Runtime
+
   const SL = {
-    state: {},
-    listeners: {},
-    islands: new Map(),
-    
+    state: %s,
+
     setState(name, value) {
       this.state[name] = value;
-      this.updateDependents(name);
+      this.render();
     },
-    
+
     getState(name) {
       return this.state[name];
     },
-    
-    updateDependents(name) {
-      const selector = '[data-state-' + name + ']';
-      const els = document.querySelectorAll(selector);
-      els.forEach(el => {
-        const template = el.getAttribute('data-state-' + name);
-        if (template) {
-          el.textContent = this.evaluateTemplate(template);
-        }
-      });
+
+    evalExpr(expr) {
+      const keys = Object.keys(this.state);
+      const vals = keys.map(k => this.state[k]);
+      try {
+        return new Function(keys.join(','), 'return (' + expr + ');').apply(null, vals);
+      } catch (e) {
+        console.error('Expression error:', expr, e);
+        return '';
+      }
     },
-    
-    evaluateTemplate(template) {
-      return template.replace(/\$\{([^}]+)\}/g, (match, expr) => {
-        try {
-          return eval(expr);
-        } catch(e) {
-          return '';
-        }
-      });
-    },
-    
-    init() {
-      document.querySelectorAll('[data-reactive="true"]').forEach(el => {
-        this.makeReactive(el);
-      });
-      
-      document.querySelectorAll('[data-on-click]').forEach(el => {
-        const handler = el.getAttribute('data-on-click');
-        el.addEventListener('click', () => {
-          try {
-            new Function(handler)();
-          } catch(e) {
-            console.error('Event handler error:', e);
+
+    runHandler(code) {
+      const keys = Object.keys(this.state);
+      const vals = keys.map(k => this.state[k]);
+      let out = null;
+      try {
+        out = new Function(keys.join(','), code + '\nreturn [' + keys.join(',') + '];').apply(null, vals);
+      } catch (e) {
+        console.error('Handler error:', code, e);
+        return;
+      }
+      if (out) {
+        let changed = false;
+        keys.forEach((k, i) => {
+          if (this.state[k] !== out[i]) {
+            this.state[k] = out[i];
+            changed = true;
           }
         });
-      });
-      
-      document.querySelectorAll('[data-on-input]').forEach(el => {
-        const handler = el.getAttribute('data-on-input');
-        el.addEventListener('input', () => {
-          try {
-            new Function(handler)();
-          } catch(e) {
-            console.error('Event handler error:', e);
-          }
-        });
-      });
-      
-      document.querySelectorAll('[data-on-submit]').forEach(el => {
-        const handler = el.getAttribute('data-on-submit');
-        el.addEventListener('submit', (e) => {
-          e.preventDefault();
-          try {
-            new Function(handler)();
-          } catch(e) {
-            console.error('Event handler error:', e);
-          }
-        });
-      });
+        if (changed) this.render();
+      }
     },
-    
-    makeReactive(el) {
-      const text = el.textContent;
-      for (const name in this.state) {
-        if (text.includes(name)) {
-          el.setAttribute('data-state-' + name, text);
+
+    render() {
+      const self = this;
+      document.querySelectorAll('[data-sl-expr]').forEach(el => {
+        el.textContent = self.evalExpr(el.getAttribute('data-sl-expr'));
+      });
+      self.renderConditionals();
+    },
+
+    renderConditionals() {
+      const self = this;
+      const comments = [];
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_COMMENT);
+      let commentNode;
+      while ((commentNode = walker.nextNode())) {
+        const text = commentNode.data.trim();
+        if (text.indexOf('if ') === 0 || text === 'else' || text === '/if') {
+          comments.push(commentNode);
         }
       }
+      const stack = [];
+      comments.forEach(c => {
+        const text = c.data.trim();
+        if (text.indexOf('if ') === 0) {
+          stack.push({ cond: text.slice(3).trim(), start: c, elseComment: null });
+        } else if (text === 'else') {
+          if (stack.length) stack[stack.length - 1].elseComment = c;
+        } else if (text === '/if') {
+          if (!stack.length) return;
+          const frame = stack.pop();
+          const nodes = [];
+          let cur = frame.start.nextSibling;
+          while (cur && cur !== c) {
+            nodes.push(cur);
+            cur = cur.nextSibling;
+          }
+          const thenNodes = [];
+          const elseNodes = [];
+          let inElse = false;
+          for (let k = 0; k < nodes.length; k++) {
+            const nd = nodes[k];
+            if (nd === frame.elseComment) { inElse = true; continue; }
+            if (nd.nodeType === Node.ELEMENT_NODE) {
+              if (inElse) elseNodes.push(nd); else thenNodes.push(nd);
+            }
+          }
+          const showThen = !!self.evalExpr(frame.cond);
+          thenNodes.forEach(nd => { nd.style.display = showThen ? '' : 'none'; });
+          elseNodes.forEach(nd => { nd.style.display = showThen ? 'none' : ''; });
+        }
+      });
+    },
+
+    bindEvents() {
+      const self = this;
+      document.querySelectorAll('*').forEach(el => {
+        Array.prototype.slice.call(el.attributes).forEach(attr => {
+          if (attr.name.indexOf('data-on-') === 0) {
+            const evtName = attr.name.slice('data-on-'.length);
+            const code = attr.value;
+            el.addEventListener(evtName, e => {
+              if (evtName === 'submit') e.preventDefault();
+              self.runHandler(code);
+            });
+          }
+        });
+      });
+    },
+
+    init() {
+      this.render();
+      this.bindEvents();
     }
   };
-  
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => SL.init());
   } else {
     SL.init();
   }
-  
+
   window.SL = SL;
 })();
-</script>`
+</script>`, stateObj)
 }
 
 func (g *Generator) wrapHTML(route, body, css, js string) string {

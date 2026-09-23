@@ -56,13 +56,27 @@ Download from the [Releases](https://github.com/Itshardtofindagoodname/say_less/
 
 | Platform | File |
 |----------|------|
+| Windows (x64) installer | `say_less.exe` |
 | Windows (x64) | `sale-windows-amd64.zip` |
 | macOS (Intel) | `sale-macos-amd64.tar.gz` |
 | macOS (Apple Silicon) | `sale-macos-arm64.tar.gz` |
 | Linux (x64) | `sale-linux-amd64.tar.gz` |
 | Linux (ARM64) | `sale-linux-arm64.tar.gz` |
 
-#### Windows
+#### Windows — GUI installer (recommended)
+
+1. Download **`say_less.exe`** from the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
+2. Double-click **`say_less.exe`**.
+3. A setup window opens (same style as the Python installer). Keep **Add `sale` to your PATH** checked and click **Install**.
+4. The installer copies `sale.exe` to your chosen location and adds it to your PATH automatically.
+5. Open a new terminal and verify:
+
+```powershell
+sale --version
+# sale 0.1.0
+```
+
+#### Windows — zip + install.bat
 
 1. Extract the zip file.
 2. Right-click `install.bat` and select **Run as administrator**.
@@ -120,11 +134,14 @@ $env:PATH += ";C:\path\to\your\binary"
 
 Run `build.bat` to build for all platforms. Binaries go to `dist/`:
 
+- `say_less.exe` (Windows GUI installer — embeds `sale.exe`, adds it to PATH)
 - `sale-windows-amd64.zip`
 - `sale-macos-amd64.tar.gz`
 - `sale-macos-arm64.tar.gz`
 - `sale-linux-amd64.tar.gz`
 - `sale-linux-arm64.tar.gz`
+
+`release.bat` packages everything (including `say_less.exe` for Windows) into the final archives.
 
 ---
 
@@ -1459,6 +1476,7 @@ docker compose up --build
 
 `release.bat` builds for all platforms and packages into archives:
 
+- `say_less.exe` (Windows GUI installer — recommended for Windows users)
 - `sale-windows-amd64.zip`
 - `sale-macos-amd64.tar.gz`
 - `sale-macos-arm64.tar.gz`

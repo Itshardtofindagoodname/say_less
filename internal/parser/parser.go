@@ -118,6 +118,14 @@ func (p *Parser) skipNewlines() {
 	}
 }
 
+// skipLayout skips structural tokens (newlines, indents) that may appear
+// inside bracketed expressions such as multi-line call arguments.
+func (p *Parser) skipLayout() {
+	for p.check(lexer.NEWLINE) || p.check(lexer.INDENT) || p.check(lexer.DEDENT) {
+		p.advance()
+	}
+}
+
 func (p *Parser) skipToNextLine() {
 	for !p.isAtEnd() && !p.check(lexer.NEWLINE) && !p.check(lexer.EOF) {
 		p.advance()
@@ -263,9 +271,8 @@ func (p *Parser) block() (*Block, error) {
 	if p.check(lexer.COLON) {
 		p.advance()
 	}
-	if p.check(lexer.NEWLINE) {
-		p.advance()
-	}
+	// Consume all newlines (including blank lines) before the indented block
+	p.skipNewlines()
 	hadIndent := p.check(lexer.INDENT)
 	if hadIndent {
 		p.advance()
@@ -333,9 +340,7 @@ func (p *Parser) blockNoDedent() (*Block, error) {
 	if _, err := p.expect(lexer.COLON); err != nil {
 		return nil, err
 	}
-	if p.check(lexer.NEWLINE) {
-		p.advance()
-	}
+	p.skipNewlines()
 	if _, err := p.expect(lexer.INDENT); err != nil {
 		return nil, fmt.Errorf("line %d: expected indented block after colon", p.current().Line)
 	}
@@ -715,28 +720,29 @@ func (p *Parser) postfix() (ASTNode, error) {
 		} else if p.check(lexer.LPAREN) {
 			tok := p.advance()
 			var args []ASTNode
-			if !p.check(lexer.RPAREN) {
-				for {
-					if p.check(lexer.IDENT) && p.peek(1).Type == lexer.COLON {
-						nameTok := p.advance()
-						p.advance() // colon
-						val, err := p.expression()
-						if err != nil {
-							return nil, err
-						}
-						args = append(args, &NamedArg{Name: nameTok.Value, Value: val, Pos: nameTok})
-					} else {
-						arg, err := p.expression()
-						if err != nil {
-							return nil, err
-						}
-						args = append(args, arg)
+			p.skipLayout()
+			for !p.check(lexer.RPAREN) && !p.isAtEnd() {
+				if p.check(lexer.IDENT) && p.peek(1).Type == lexer.COLON {
+					nameTok := p.advance()
+					p.advance() // colon
+					val, err := p.expression()
+					if err != nil {
+						return nil, err
 					}
-					if !p.match(lexer.COMMA) {
-						break
+					args = append(args, &NamedArg{Name: nameTok.Value, Value: val, Pos: nameTok})
+				} else {
+					arg, err := p.expression()
+					if err != nil {
+						return nil, err
 					}
+					args = append(args, arg)
 				}
+				if !p.match(lexer.COMMA) {
+					break
+				}
+				p.skipLayout()
 			}
+			p.skipLayout()
 			if _, err := p.expect(lexer.RPAREN); err != nil {
 				return nil, err
 			}
@@ -819,18 +825,19 @@ func (p *Parser) primary() (ASTNode, error) {
 func (p *Parser) listLiteral() (ASTNode, error) {
 	tok := p.advance()
 	var elems []ASTNode
-	if !p.check(lexer.RBRACKET) {
-		for {
-			elem, err := p.expression()
-			if err != nil {
-				return nil, err
-			}
-			elems = append(elems, elem)
-			if !p.match(lexer.COMMA) {
-				break
-			}
+	p.skipLayout()
+	for !p.check(lexer.RBRACKET) && !p.isAtEnd() {
+		elem, err := p.expression()
+		if err != nil {
+			return nil, err
 		}
+		elems = append(elems, elem)
+		if !p.match(lexer.COMMA) {
+			break
+		}
+		p.skipLayout()
 	}
+	p.skipLayout()
 	if _, err := p.expect(lexer.RBRACKET); err != nil {
 		return nil, err
 	}
@@ -840,32 +847,33 @@ func (p *Parser) listLiteral() (ASTNode, error) {
 func (p *Parser) mapLiteral() (ASTNode, error) {
 	tok := p.advance()
 	var entries []MapEntry
-	if !p.check(lexer.RBRACE) {
-		for {
-			var key ASTNode
-			if p.check(lexer.IDENT) && p.peek(1).Type == lexer.COLON {
-				keyTok := p.advance()
-				key = &StringLit{Value: keyTok.Value, Pos: keyTok}
-			} else {
-				var err error
-				key, err = p.expression()
-				if err != nil {
-					return nil, err
-				}
-			}
-			if _, err := p.expect(lexer.COLON); err != nil {
-				return nil, err
-			}
-			val, err := p.expression()
+	p.skipLayout()
+	for !p.check(lexer.RBRACE) && !p.isAtEnd() {
+		var key ASTNode
+		if p.check(lexer.IDENT) && p.peek(1).Type == lexer.COLON {
+			keyTok := p.advance()
+			key = &StringLit{Value: keyTok.Value, Pos: keyTok}
+		} else {
+			var err error
+			key, err = p.expression()
 			if err != nil {
 				return nil, err
 			}
-			entries = append(entries, MapEntry{Key: key, Value: val})
-			if !p.match(lexer.COMMA) {
-				break
-			}
 		}
+		if _, err := p.expect(lexer.COLON); err != nil {
+			return nil, err
+		}
+		val, err := p.expression()
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, MapEntry{Key: key, Value: val})
+		if !p.match(lexer.COMMA) {
+			break
+		}
+		p.skipLayout()
 	}
+	p.skipLayout()
 	if _, err := p.expect(lexer.RBRACE); err != nil {
 		return nil, err
 	}

@@ -17,6 +17,7 @@ REM Windows release
 echo Packaging Windows release...
 mkdir release\sale-windows-amd64 2>nul
 copy dist\sale-windows-amd64.exe release\sale-windows-amd64\sale.exe >nul
+copy dist\say_less.exe release\sale-windows-amd64\say_less.exe >nul
 copy install.bat release\sale-windows-amd64\install.bat >nul
 copy README.md release\sale-windows-amd64\README.md >nul
 cd release

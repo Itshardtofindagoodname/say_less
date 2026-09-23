@@ -28,7 +28,10 @@ get "/"
                 <p class="tagline" id="tagline">// shipping since 2026</p>
                 <h1 id="title">Say Less.</h1>
                 <p class="subtitle" id="subtitle">Build more. Write <span>less code</span>.</p>
-                <a href="#" class="cta-btn" id="cta">Get Started</a>
+                <div class="cta-row" id="ctaRow">
+                    <a href="https://github.com/Itshardtofindagoodname/say_less/releases/latest/download/say_less.exe" class="cta-btn" id="cta">Download for Windows</a>
+                    <a href="https://github.com/Itshardtofindagoodname/say_less" class="cta-btn cta-btn-ghost" id="ctaGhost">Get Started</a>
+                </div>
             </div>
 
             <script>
@@ -38,7 +41,7 @@ get "/"
                   .fromTo("#title", { y: 60, opacity: 0, skewY: 3 }, { y: 0, opacity: 1, skewY: 0, duration: 1 }, "-=0.6")
                   .fromTo("#tagline", { y: 20, opacity: 0 }, { y: 0, opacity: 1, duration: 0.7 }, "-=0.5")
                   .fromTo("#subtitle", { y: 30, opacity: 0 }, { y: 0, opacity: 1, duration: 0.7 }, "-=0.3")
-                  .fromTo("#cta", { y: 20, opacity: 0, scale: 0.95 }, { y: 0, opacity: 1, scale: 1, duration: 0.6 }, "-=0.2");
+                  .fromTo("#ctaRow", { y: 20, opacity: 0 }, { y: 0, opacity: 1, duration: 0.6 }, "-=0.2");
 
                 gsap.to("h1", {
                     backgroundPosition: "100% 50%",

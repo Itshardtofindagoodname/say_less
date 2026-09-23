@@ -177,11 +177,13 @@ func (c *Compiler) compileStmt(stmt parser.ASTNode) (IRNode, error) {
 		}
 		return &IRText{Content: "false"}, nil
 	case *parser.Binary:
-		return &IRText{Content: c.exprToString(n)}, nil
+		return &IRBinding{Expr: c.exprToString(n)}, nil
+	case *parser.Unary:
+		return &IRBinding{Expr: c.exprToString(n)}, nil
 	case *parser.Ident:
-		return &IRText{Content: n.Name}, nil
+		return &IRBinding{Expr: n.Name}, nil
 	case *parser.Member:
-		return &IRText{Content: c.exprToString(n)}, nil
+		return &IRBinding{Expr: c.exprToString(n)}, nil
 	case *parser.Call:
 		// Check if this is a component call
 		if ident, ok := n.Callee.(*parser.Ident); ok {
@@ -189,7 +191,7 @@ func (c *Compiler) compileStmt(stmt parser.ASTNode) (IRNode, error) {
 				return c.compileComponentCall(n, ident.Name)
 			}
 		}
-		return &IRText{Content: c.exprToString(n)}, nil
+		return &IRBinding{Expr: c.exprToString(n)}, nil
 	default:
 		return nil, nil
 	}
@@ -220,9 +222,14 @@ func (c *Compiler) compileElement(elem *parser.HtmlElement) (IRNode, error) {
 	// Compile attributes
 	for _, attr := range elem.Attributes {
 		irAttr := &IRAttribute{
-			Name:  attr.Name,
-			Value: c.exprToString(attr.Value),
-			IsExpr: true,
+			Name: attr.Name,
+		}
+		if s, ok := attr.Value.(*parser.StringLit); ok {
+			irAttr.Value = s.Value
+			irAttr.IsExpr = false
+		} else {
+			irAttr.Value = c.exprToString(attr.Value)
+			irAttr.IsExpr = true
 		}
 		irElem.Attributes = append(irElem.Attributes, irAttr)
 	}
@@ -292,9 +299,7 @@ func (c *Compiler) compileExprStmt(expr *parser.ExprStmt) (IRNode, error) {
 			}
 		}
 	}
-	return &IRText{
-		Content: c.exprToString(expr.Expr),
-	}, nil
+	return c.compileStmt(expr.Expr)
 }
 
 func (c *Compiler) compileEventHandler(evt *parser.EventHandler) (IRNode, error) {
@@ -382,9 +387,20 @@ func (c *Compiler) exprToString(expr parser.ASTNode) string {
 	case *parser.Ident:
 		return n.Name
 	case *parser.Binary:
-		return fmt.Sprintf("%s %s %s", c.exprToString(n.Left), n.Op, c.exprToString(n.Right))
+		op := n.Op
+		switch op {
+		case "and":
+			op = "&&"
+		case "or":
+			op = "||"
+		}
+		return fmt.Sprintf("%s %s %s", c.exprToString(n.Left), op, c.exprToString(n.Right))
 	case *parser.Unary:
-		return fmt.Sprintf("%s%s", n.Op, c.exprToString(n.Expr))
+		op := n.Op
+		if op == "not" {
+			op = "!"
+		}
+		return fmt.Sprintf("%s%s", op, c.exprToString(n.Expr))
 	case *parser.Call:
 		args := make([]string, len(n.Args))
 		for i, arg := range n.Args {
@@ -399,6 +415,12 @@ func (c *Compiler) exprToString(expr parser.ASTNode) string {
 			elems[i] = c.exprToString(elem)
 		}
 		return fmt.Sprintf("[%s]", strings.Join(elems, ", "))
+	case *parser.MapLit:
+		entries := make([]string, len(n.Entries))
+		for i, entry := range n.Entries {
+			entries[i] = fmt.Sprintf("%s: %s", c.exprToString(entry.Key), c.exprToString(entry.Value))
+		}
+		return fmt.Sprintf("{%s}", strings.Join(entries, ", "))
 	default:
 		return "undefined"
 	}
@@ -418,7 +440,7 @@ func (c *Compiler) stmtToString(stmt parser.ASTNode) string {
 	}
 	switch n := stmt.(type) {
 	case *parser.Assign:
-		return fmt.Sprintf("let %s = %s", n.Name, c.exprToString(n.Value))
+		return fmt.Sprintf("%s = %s", n.Name, c.exprToString(n.Value))
 	case *parser.AugAssign:
 		return fmt.Sprintf("%s %s %s", n.Name, n.Op, c.exprToString(n.Value))
 	case *parser.ExprStmt:

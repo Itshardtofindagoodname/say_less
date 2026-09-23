@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"sayless/internal/eval"
@@ -74,7 +75,7 @@ Usage: sale <command> [options]
 Core Commands:
   run <file>          Run a Say Less file
   build [--release]   Build project (supports web compilation)
-  dev                 Start development server (supports web mode)
+dev [--port 8080]  Start dev server with live reload + auto-rebuild (web)
   test                Run tests
 
 Project Commands:
@@ -121,14 +122,7 @@ func cmdRun(args []string) {
 }
 
 func runSource(source string, filename string) {
-	l := lexer.New(source, filename)
-	tokens, err := l.Tokenize()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Lexer error: %v\n", err)
-		os.Exit(1)
-	}
-	p := parser.New(tokens)
-	program, err := p.Parse()
+	program, err := parseSource(source, filename)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
 		os.Exit(1)
@@ -136,7 +130,12 @@ func runSource(source string, filename string) {
 
 	// Check if this is a web program (has page or component declarations)
 	if isWebProgram(program) {
-		runWebProgram(program, filename)
+		if err := buildWebProgram(program); err != nil {
+			fmt.Fprintf(os.Stderr, "Web compilation error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Web build successful!")
+		fmt.Printf("Output: build/web/index.html\n")
 		return
 	}
 
@@ -146,6 +145,24 @@ func runSource(source string, filename string) {
 		fmt.Fprintf(os.Stderr, "Runtime error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func parseSource(source string, filename string) (*parser.Program, error) {
+	l := lexer.New(source, filename)
+	tokens, err := l.Tokenize()
+	if err != nil {
+		return nil, err
+	}
+	p := parser.New(tokens)
+	return p.Parse()
+}
+
+func parseFile(filename string) (*parser.Program, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	return parseSource(string(data), filename)
 }
 
 func isWebProgram(program *parser.Program) bool {
@@ -158,16 +175,14 @@ func isWebProgram(program *parser.Program) bool {
 	return false
 }
 
-func runWebProgram(program *parser.Program, filename string) {
+func buildWebProgram(program *parser.Program) error {
 	compiler := web.NewCompiler()
 	output, err := compiler.Compile(program)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Web compilation error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Create build directory
-	os.MkdirAll("build", 0755)
 	os.MkdirAll("build/web", 0755)
 
 	// Write output files
@@ -178,9 +193,25 @@ func runWebProgram(program *parser.Program, filename string) {
 	if output.JS != "" {
 		writeFile("build/web/runtime.js", output.JS)
 	}
+	return nil
+}
 
-	fmt.Println("Web build successful!")
-	fmt.Printf("Output: build/web/index.html\n")
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == name {
+			return true
+		}
+	}
+	return false
+}
+
+func flagValue(args []string, name string) string {
+	for i, a := range args {
+		if a == name && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 func cmdNew(args []string) {
@@ -450,32 +481,13 @@ version = "0.1.0"
 
 func cmdBuild(args []string) {
 	fmt.Println("Building project...")
-	release := false
-	for _, a := range args {
-		if a == "--release" {
-			release = true
-		}
-	}
-	_ = release
 	mainFile := findMainFile()
 	if mainFile == "" {
 		fmt.Fprintf(os.Stderr, "No main.sl found. Create src/main.sl first.\n")
 		os.Exit(1)
 	}
 	fmt.Printf("Compiling %s...\n", mainFile)
-	data, err := os.ReadFile(mainFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", mainFile, err)
-		os.Exit(1)
-	}
-	l := lexer.New(string(data), mainFile)
-	tokens, err := l.Tokenize()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Lexer error: %v\n", err)
-		os.Exit(1)
-	}
-	p := parser.New(tokens)
-	program, err := p.Parse()
+	program, err := parseFile(mainFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
 		os.Exit(1)
@@ -483,19 +495,9 @@ func cmdBuild(args []string) {
 
 	// Check if this is a web program
 	if isWebProgram(program) {
-		compiler := web.NewCompiler()
-		output, err := compiler.Compile(program)
-		if err != nil {
+		if err := buildWebProgram(program); err != nil {
 			fmt.Fprintf(os.Stderr, "Web compilation error: %v\n", err)
 			os.Exit(1)
-		}
-		os.MkdirAll("build/web", 0755)
-		writeFile("build/web/index.html", output.HTML)
-		if output.CSS != "" {
-			writeFile("build/web/styles.css", output.CSS)
-		}
-		if output.JS != "" {
-			writeFile("build/web/runtime.js", output.JS)
 		}
 		fmt.Println("Web build successful!")
 		fmt.Printf("Output: build/web/index.html\n")
@@ -505,60 +507,59 @@ func cmdBuild(args []string) {
 }
 
 func cmdDev(args []string) {
-	fmt.Println("Starting Say Less development server...")
-	mainFile := findMainFile()
+	port := 8080
+	if hasFlag(args, "--port") || hasFlag(args, "-p") {
+		if p, err := strconv.Atoi(flagValue(args, "--port")); err == nil {
+			port = p
+		} else if p, err := strconv.Atoi(flagValue(args, "-p")); err == nil {
+			port = p
+		}
+	}
+
+	mainFile := ""
+	for _, a := range args {
+		if a == "--port" || a == "-p" || strings.HasPrefix(a, "--") {
+			continue
+		}
+		if _, err := strconv.Atoi(a); err == nil {
+			continue
+		}
+		mainFile = a
+		break
+	}
 	if mainFile == "" {
-		fmt.Fprintf(os.Stderr, "No main.sl found. Create src/main.sl first.\n")
+		mainFile = findMainFile()
+	}
+	if mainFile == "" {
+		fmt.Fprintf(os.Stderr, "No main.sl found. Create src/main.sl first, or pass a file:\n")
+		fmt.Fprintf(os.Stderr, "  sale dev src/main.sl\n")
 		os.Exit(1)
 	}
-	fmt.Printf("Watching %s for changes...\n", filepath.Dir(mainFile))
-	fmt.Println("Development server running on http://localhost:8080")
-	fmt.Println("Press Ctrl+C to stop.")
 
-	// Initial build
-	data, err := os.ReadFile(mainFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
-	}
-	l := lexer.New(string(data), mainFile)
-	tokens, err := l.Tokenize()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Lexer error: %v\n", err)
-		return
-	}
-	p := parser.New(tokens)
-	program, err := p.Parse()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
-		return
+	rootDir := filepath.Dir(mainFile)
+	buildDir := filepath.Join("build", "web")
+
+	build := func() error {
+		program, err := parseFile(mainFile)
+		if err != nil {
+			return err
+		}
+		if !isWebProgram(program) {
+			return fmt.Errorf("no page or component declarations found in %s", mainFile)
+		}
+		return buildWebProgram(program)
 	}
 
-	if isWebProgram(program) {
-		// Web development mode
-		compiler := web.NewCompiler()
-		output, err := compiler.Compile(program)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Web compilation error: %v\n", err)
-			return
-		}
-		os.MkdirAll("build/web", 0755)
-		writeFile("build/web/index.html", output.HTML)
-		if output.CSS != "" {
-			writeFile("build/web/styles.css", output.CSS)
-		}
-		if output.JS != "" {
-			writeFile("build/web/runtime.js", output.JS)
-		}
-		fmt.Println("Build successful! Serving on http://localhost:8080")
-		// TODO: Start file watcher and HTTP server
-	} else {
-		// Traditional interpreter mode
-		interp := eval.New()
-		err = interp.Run(program)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Runtime error: %v\n", err)
-		}
+	if err := build(); err != nil {
+		fmt.Fprintf(os.Stderr, "Build error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Watching %s for changes...\n", rootDir)
+
+	server := web.NewDevServer(buildDir, rootDir, port, build)
+	if err := server.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Dev server error: %v\n", err)
+		os.Exit(1)
 	}
 }
 

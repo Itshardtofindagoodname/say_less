@@ -1,0 +1,23 @@
+# Build outputs
+build/
+dist/
+release/
+*.exe
+*.exe~
+*.test
+*.out
+
+# Installer bundle payload (generated at release time)
+cmd/installer/sale.exe
+
+# Go
+*.prof
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Kilo
+.kilo/
