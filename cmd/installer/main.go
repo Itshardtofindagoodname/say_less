@@ -1,11 +1,14 @@
 //go:build windows && amd64
 
-// Command installer builds say_less.exe, a Windows setup wizard (like Python's
-// installer) that installs the Say Less language and adds it to PATH.
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/color"
+	_ "image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,16 +19,17 @@ import (
 
 const version = "0.1.0"
 
-// ---- Win32 constants ----
-
 const (
-	wmDestroy        = 0x0002
-	wmCommand        = 0x0111
-	wmClose          = 0x0010
-	wmCtlColorStatic = 0x0138
-	wmCtlColorBtn    = 0x0135
-	wmSetfont        = 0x0030
-	wmSettingChange  = 0x001A
+	wmDestroy         = 0x0002
+	wmClose           = 0x0010
+	wmEraseBackground = 0x0014
+	wmPaint           = 0x000F
+	wmCommand         = 0x0111
+	wmSetFont         = 0x0030
+	wmSettingChange   = 0x001A
+	wmCtlColorEdit    = 0x0133
+	wmCtlColorStatic  = 0x0138
+	wmCtlColorBtn     = 0x0135
 
 	wmUser    = 0x0400
 	wmRefresh = wmUser + 1
@@ -36,117 +40,206 @@ const (
 	wsVisible          = 0x10000000
 	wsTabstop          = 0x00010000
 	wsBorder           = 0x00800000
+	wsClipChildren     = 0x02000000
+	wsClipSiblings     = 0x04000000
 	wsExClientEdge     = 0x00000200
 
-	ssLeft        = 0x00000000
-	esAutohscroll = 0x0080
-	bsPushButton  = 0x00000000
-	bsAcheckbox   = 0x00000003
-	bmGetCheck    = 0x00F0
-	bmSetCheck    = 0x00F1
-	bSTChecked    = 0x0001
-	pbmSetRange32 = wmUser + 6
-	pbmSetPos     = wmUser + 2
+	ssLeft          = 0x00000000
+	ssBitmap        = 0x0000000E
+	ssCenterImage   = 0x00000200
+	ssPathEllipsis  = 0x00000800
+	stmSetImage     = 0x017E
+	esAutohscroll   = 0x0080
+	bsPushButton    = 0x00000000
+	bsDefaultButton = 0x00000001
+	bsAutoCheckBox  = 0x00000003
+	bmGetCheck      = 0x00F0
+	bmSetCheck      = 0x00F1
+	bstChecked      = 0x0001
+	pbmSetRange32   = wmUser + 6
+	pbmSetPos       = wmUser + 2
 
-	btnClicked = 0
-	swShow     = 1
-	swHidden   = 0
-
-	seeMaskNocloseprocess = 0x00000040
-	tokenQuery            = 0x0008
-	tokenElevation        = 20
+	btnClicked       = 0
+	swHide           = 0
+	swShow           = 1
+	seeMaskNoProcess = 0x00000040
+	dibRgbColors     = 0
+	frPrivate        = 0x00000010
+	transparent      = 1
+	colorWindowText  = 8
+	colorButtonFace  = 15
 )
 
-// Control identifiers
 const (
-	idcBanner   = 101
-	idcTitle    = 102
-	idcSubtitle = 103
-	idcLabelDir = 104
-	idcEditDir  = 105
-	idcBrowse   = 106
-	idcChkPath  = 107
-	idcStatus   = 108
-	idcProgress = 109
-	idcInstall  = 110
-	idcCancel   = 111
+	stepIntro = iota
+	stepLocation
+	stepInstall
 )
 
-// Registry constants
 const (
-	hKEYCurrentUser   = 0x80000001
-	hKEYLocalMachine  = 0x80000002
-	kEYRead           = 0x00020019
-	kEYWrite          = 0x00020006
-	rEGExpandSz       = uint32(2)
-	eRRorFileNotFound = syscall.Errno(2)
+	installReady = iota
+	installRunning
+	installDone
+	installFailed
 )
 
-// System PATH registry key
+const (
+	idcLeftPanel = iota + 100
+	idcLeftEyebrow
+	idcPortrait
+	idcLeftTitle
+	idcLeftVersion
+	idcRightPanel
+	idcLogo
+	idcLogoFallback
+	idcStepIndicator
+	idcTitle
+	idcDescription
+	idcHeaderDivider
+	idcAboutHeading
+	idcAboutBody
+	idcIncludedPanel
+	idcIncludedText
+	idcPathCheck
+	idcLocationHeading
+	idcLocationLabel
+	idcLocationEdit
+	idcBrowse
+	idcValidation
+	idcLocationNote
+	idcProgressHeading
+	idcProgress
+	idcPercent
+	idcProgressDetail
+	idcInstallPath
+	idcSuccessHeading
+	idcSuccessBody
+	idcSuccessPath
+	idcErrorDetail
+	idcFooterDivider
+	idcBack
+	idcAction
+)
+
 const environmentKey = `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`
 
-type wndClassEx struct {
-	CbSize, Style uint32
-	LpfnWndProc   uintptr
-	CbClsExtra    int32
-	CbWndExtra    int32
-	HInstance     syscall.Handle
-	HIcon         syscall.Handle
-	HCursor       syscall.Handle
-	HbrBackground syscall.Handle
-	LpszMenuName  *uint16
-	LpszClassName *uint16
-	HIconSm       syscall.Handle
+const (
+	hkeyCurrentUser   = 0x80000001
+	hkeyLocalMachine  = 0x80000002
+	keyRead           = 0x00020019
+	keyWrite          = 0x00020006
+	regExpandSz       = uint32(2)
+	errorFileNotFound = syscall.Errno(2)
+)
+
+type windowClassEx struct {
+	cbSize, style uint32
+	lpfnWndProc   uintptr
+	cbClsExtra    int32
+	cbWndExtra    int32
+	hInstance     syscall.Handle
+	hIcon         syscall.Handle
+	hCursor       syscall.Handle
+	hbrBackground syscall.Handle
+	pszMenuName   *uint16
+	pszClassName  *uint16
+	hIconSm       syscall.Handle
 }
 
-type msg struct {
-	HWnd    uintptr
-	Message uint32
+type message struct {
+	hwnd    uintptr
+	message uint32
 	_       uint32
-	WParam  uintptr
-	LParam  uintptr
-	Time    uint32
-	Pt      struct{ X, Y int32 }
+	wParam  uintptr
+	lParam  uintptr
+	time    uint32
+	point   struct{ x, y int32 }
 }
+
+type point struct{ x, y int32 }
+
+type rect struct{ left, top, right, bottom int32 }
 
 type logFont struct {
-	LfHeight, LfWidth, LfEscapement, LfOrientation, LfWeight                                                    int32
-	LfItalic, LfUnderline, LfStrikeOut, LfCharSet, LfOutPrecision, LfClipPrecision, LfQuality, LfPitchAndFamily byte
-	LfFaceName                                                                                                  [32]uint16
+	lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight     int32
+	lfItalic, lfUnderline, lfStrikeOut, lfCharSet                uint8
+	lfOutPrecision, lfClipPrecision, lfQuality, lfPitchAndFamily uint8
+	lfFaceName                                                   [32]uint16
 }
 
 type browseInfo struct {
-	HWndOwner      uintptr
-	PIDLRoot       uintptr
-	PszDisplayName *uint16
-	LpszTitle      *uint16
-	UlFlags        uint32
-	Lpfn           uintptr
-	LParam         uintptr
-	IImage         int32
+	hwndOwner      uintptr
+	pidlRoot       uintptr
+	pszDisplayName *uint16
+	lpszTitle      *uint16
+	ulFlags        uint32
+	lpfn           uintptr
+	lParam         uintptr
+	iImage         int32
 }
 
 type initCommonControlsEx struct {
-	DwSize uint32
-	DwICC  uint32
+	dwSize uint32
+	dwICC  uint32
 }
 
 type shellExecuteInfo struct {
-	CbSize, FMask uint32
-	HWnd          uintptr
-	LpVerb        *uint16
-	LpFile        *uint16
-	LpParameters  *uint16
-	LpDirectory   *uint16
-	NShow         int32
-	HInstApp      uintptr
-	LpIDList      uintptr
-	LpClass       *uint16
-	HKeyClass     uintptr
-	DHotKey       uint32
-	HMonitor      uintptr
-	HProcess      uintptr
+	cbSize, fMask uint32
+	hwnd          uintptr
+	lpVerb        *uint16
+	lpFile        *uint16
+	lpParameters  *uint16
+	lpDirectory   *uint16
+	nShow         int32
+	hInstApp      uintptr
+	lpIDList      uintptr
+	lpClass       *uint16
+	hkeyClass     uintptr
+	dHotKey       uint32
+	hMonitor      uintptr
+	hProcess      uintptr
 }
+
+type bitmapInfoHeader struct {
+	size            uint32
+	width           int32
+	height          int32
+	planes          uint16
+	bitCount        uint16
+	compression     uint32
+	sizeImage       uint32
+	xPelsPerMeter   int32
+	yPelsPerMeter   int32
+	colorsUsed      uint32
+	colorsImportant uint32
+}
+
+type bitmapInfo struct {
+	header bitmapInfoHeader
+	colors [1]uint32
+}
+
+type paintStruct struct {
+	hDC       uintptr
+	erase     uint32
+	repaint   rect
+	restore   uint32
+	incUpdate uint32
+}
+
+type payloadSource struct {
+	reader io.ReadCloser
+	size   int64
+}
+
+type progressWriter struct {
+	destination io.Writer
+	total       int64
+	written     int64
+	update      func(int64, int64)
+}
+
+type readerOnly struct{ io.Reader }
 
 var (
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
@@ -156,8 +249,14 @@ var (
 	comctl32 = syscall.NewLazyDLL("comctl32.dll")
 	ole32    = syscall.NewLazyDLL("ole32.dll")
 	advapi32 = syscall.NewLazyDLL("advapi32.dll")
+	ntdll    = syscall.NewLazyDLL("ntdll.dll")
 
 	procGetModuleHandleW     = kernel32.NewProc("GetModuleHandleW")
+	procCloseHandle          = kernel32.NewProc("CloseHandle")
+	procGetCurrentProcess    = kernel32.NewProc("GetCurrentProcess")
+	procWaitForSingleObject  = kernel32.NewProc("WaitForSingleObject")
+	procGetExitCodeProcess   = kernel32.NewProc("GetExitCodeProcess")
+	procMoveFileExW          = kernel32.NewProc("MoveFileExW")
 	procRegisterClassExW     = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW      = user32.NewProc("CreateWindowExW")
 	procDefWindowProcW       = user32.NewProc("DefWindowProcW")
@@ -173,276 +272,931 @@ var (
 	procGetWindowTextLengthW = user32.NewProc("GetWindowTextLengthW")
 	procSendMessageW         = user32.NewProc("SendMessageW")
 	procPostMessageW         = user32.NewProc("PostMessageW")
-	procMessageBoxW          = user32.NewProc("MessageBoxW")
 	procEnableWindow         = user32.NewProc("EnableWindow")
+	procSetFocus             = user32.NewProc("SetFocus")
 	procLoadCursorW          = user32.NewProc("LoadCursorW")
 	procLoadIconW            = user32.NewProc("LoadIconW")
 	procGetSysColorBrush     = user32.NewProc("GetSysColorBrush")
 	procSendMessageTimeoutW  = user32.NewProc("SendMessageTimeoutW")
-
-	procShellExecuteExW = shell32.NewProc("ShellExecuteExW")
-
-	procCloseHandle         = kernel32.NewProc("CloseHandle")
-	procWaitForSingleObject = kernel32.NewProc("WaitForSingleObject")
-	procGetExitCodeProcess  = kernel32.NewProc("GetExitCodeProcess")
-	procGetCurrentProcess   = kernel32.NewProc("GetCurrentProcess")
-
-	procCreateSolidBrush    = gdi32.NewProc("CreateSolidBrush")
-	procGetStockObject      = gdi32.NewProc("GetStockObject")
-	procSetTextColor        = gdi32.NewProc("SetTextColor")
-	procSetBkMode           = gdi32.NewProc("SetBkMode")
-	procCreateFontIndirectW = gdi32.NewProc("CreateFontIndirectW")
-
+	procGetDlgCtrlID         = user32.NewProc("GetDlgCtrlID")
+	procSetBkMode            = gdi32.NewProc("SetBkMode")
+	procSetBkColor           = gdi32.NewProc("SetBkColor")
+	procSetTextColor         = gdi32.NewProc("SetTextColor")
+	procCreateFontIndirectW  = gdi32.NewProc("CreateFontIndirectW")
+	procCreateSolidBrush     = gdi32.NewProc("CreateSolidBrush")
+	procDeleteObject         = gdi32.NewProc("DeleteObject")
+	procCreateDIBSection     = gdi32.NewProc("CreateDIBSection")
+	procRtlMoveMemory        = ntdll.NewProc("RtlMoveMemory")
+	procSetWindowSubclass    = comctl32.NewProc("SetWindowSubclass")
+	procDefSubclassProc      = comctl32.NewProc("DefSubclassProc")
+	procBeginPaint           = user32.NewProc("BeginPaint")
+	procEndPaint             = user32.NewProc("EndPaint")
+	procGetClientRect        = user32.NewProc("GetClientRect")
+	procCreateCompatibleDC   = gdi32.NewProc("CreateCompatibleDC")
+	procSelectObject         = gdi32.NewProc("SelectObject")
+	procBitBlt               = gdi32.NewProc("BitBlt")
+	procAddFontMemResourceEx = gdi32.NewProc("AddFontMemResourceEx")
+	procGetDC                = user32.NewProc("GetDC")
+	procReleaseDC            = user32.NewProc("ReleaseDC")
+	procShellExecuteExW      = shell32.NewProc("ShellExecuteExW")
 	procInitCommonControlsEx = comctl32.NewProc("InitCommonControlsEx")
 	procSHBrowseForFolderW   = shell32.NewProc("SHBrowseForFolderW")
 	procSHGetPathFromIDListW = shell32.NewProc("SHGetPathFromIDListW")
 	procCoTaskMemFree        = ole32.NewProc("CoTaskMemFree")
-
-	procRegOpenKeyExW       = advapi32.NewProc("RegOpenKeyExW")
-	procRegQueryValueExW    = advapi32.NewProc("RegQueryValueExW")
-	procRegSetValueExW      = advapi32.NewProc("RegSetValueExW")
-	procRegCloseKey         = advapi32.NewProc("RegCloseKey")
-	procOpenProcessToken    = advapi32.NewProc("OpenProcessToken")
-	procGetTokenInformation = advapi32.NewProc("GetTokenInformation")
+	procRegOpenKeyExW        = advapi32.NewProc("RegOpenKeyExW")
+	procRegQueryValueExW     = advapi32.NewProc("RegQueryValueExW")
+	procRegSetValueExW       = advapi32.NewProc("RegSetValueExW")
+	procRegCloseKey          = advapi32.NewProc("RegCloseKey")
+	procOpenProcessToken     = advapi32.NewProc("OpenProcessToken")
+	procGetTokenInformation  = advapi32.NewProc("GetTokenInformation")
+	procAdjustWindowRectEx   = user32.NewProc("AdjustWindowRectEx")
+	procGetSystemMetrics     = user32.NewProc("GetSystemMetrics")
+	procSetProcessDPIAware   = user32.NewProc("SetProcessDPIAware")
+	procGetDpiForSystem      = user32.NewProc("GetDpiForSystem")
 )
 
 var (
-	hInstance   syscall.Handle
-	mainHwnd    syscall.Handle
-	classFont   syscall.Handle
-	titleFont   syscall.Handle
-	bannerBrush syscall.Handle
-	controls    map[int]syscall.Handle
+	hInstance      syscall.Handle
+	mainHwnd       syscall.Handle
+	controls       map[int]syscall.Handle
+	fontRegular    syscall.Handle
+	fontSemibold   syscall.Handle
+	leftBrush      syscall.Handle
+	rightBrush     syscall.Handle
+	surfaceBrush   syscall.Handle
+	dividerBrush   syscall.Handle
+	whiteBrush     syscall.Handle
+	logoBitmap     syscall.Handle
+	portraitBitmap syscall.Handle
+	fontScale      = 1
 
-	statusMtx sync.Mutex
-	statusLog []string
+	currentStep     = stepIntro
+	installStatus   = installReady
+	selectedDir     string
+	addToPath       bool
+	installError    string
+	validationError bool
 
-	state int // 0=ready, 1=installing, 2=done
+	statusMutex      sync.Mutex
+	statusText       string
+	detailText       string
+	statusPercent    int
+	progressPosition int
 )
 
 func utf16(s string) *uint16 {
-	p, err := syscall.UTF16PtrFromString(s)
+	ptr, err := syscall.UTF16PtrFromString(s)
 	if err != nil {
 		return nil
 	}
-	return p
+	return ptr
 }
 
-// ---- window proc ----
+func scaled(value int) int {
+	return (value*fontScale + 48) / 96
+}
 
-func wndProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr) uintptr {
+func setText(id int, value string) {
+	if control := controls[id]; control != 0 {
+		procSetWindowTextW.Call(uintptr(control), uintptr(unsafe.Pointer(utf16(value))))
+	}
+}
+
+func setVisible(id int, visible bool) {
+	if control := controls[id]; control != 0 {
+		command := uintptr(swHide)
+		if visible {
+			command = swShow
+		}
+		procShowWindow.Call(uintptr(control), command)
+	}
+}
+
+func setEnabled(id int, enabled bool) {
+	if control := controls[id]; control != 0 {
+		value := uintptr(0)
+		if enabled {
+			value = 1
+		}
+		procEnableWindow.Call(uintptr(control), value)
+	}
+}
+
+func getEditText(id int) string {
+	control := uintptr(controls[id])
+	length, _, _ := procGetWindowTextLengthW.Call(control)
+	if length == 0 {
+		return ""
+	}
+	buffer := make([]uint16, length+2)
+	procGetWindowTextW.Call(control, uintptr(unsafe.Pointer(&buffer[0])), length+1)
+	return syscall.UTF16ToString(buffer)
+}
+
+func getCheck(id int) bool {
+	result, _, _ := procSendMessageW.Call(uintptr(controls[id]), bmGetCheck, 0, 0)
+	return result == bstChecked
+}
+
+func windowProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr) uintptr {
 	switch message {
 	case wmDestroy:
 		procPostQuitMessage.Call(0)
 		return 0
 	case wmClose:
+		if installStatus == installRunning {
+			setInstallerStatus("Installation in progress", "Please wait for the installation to finish before closing.")
+			updateProgressUI(progressPosition)
+			return 0
+		}
 		procDestroyWindow.Call(uintptr(hwnd))
 		return 0
 	case wmCommand:
-		code := uint32(wParam >> 16)
-		id := uint32(wParam & 0xFFFF)
-		if code == btnClicked {
-			switch id {
-			case idcInstall:
-				onInstall(hwnd)
-			case idcCancel:
-				onCancel(hwnd)
+		if uint32(wParam>>16) == btnClicked {
+			switch uint32(wParam & 0xFFFF) {
+			case idcBack:
+				onBack()
+			case idcAction:
+				onAction()
 			case idcBrowse:
 				onBrowse(hwnd)
 			}
 		}
 		return 0
-	case wmCtlColorStatic, wmCtlColorBtn:
-		return colorHandler(uintptr(hwnd), lParam)
+	case wmEraseBackground:
+		return uintptr(rightBrush)
+	case wmCtlColorEdit:
+		procSetBkColor.Call(lParam, 0x00FFFFFF)
+		procSetTextColor.Call(lParam, 0x00251F35)
+		return uintptr(whiteBrush)
+	case wmCtlColorStatic:
+		return staticColorHandler(lParam)
+	case wmCtlColorBtn:
+		procSetTextColor.Call(lParam, 0x00251F35)
+		brush, _, _ := procGetSysColorBrush.Call(colorButtonFace)
+		return brush
 	case wmRefresh:
-		return refreshHandler(hwnd, wParam)
+		refreshInstaller(wParam)
+		return 0
 	case wmFinish:
-		return finishHandler(hwnd, wParam)
+		finishInstaller(wParam != 0)
+		return 0
 	}
-	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
-	return r
+	result, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
+	return result
 }
 
-func colorHandler(hwnd, lParam uintptr) uintptr {
-	procSetBkMode.Call(lParam, 1) // TRANSPARENT
-	if hwnd == uintptr(controls[idcBanner]) ||
-		hwnd == uintptr(controls[idcTitle]) ||
-		hwnd == uintptr(controls[idcSubtitle]) {
-		procSetTextColor.Call(lParam, 0x00FFFFFF)
-		return uintptr(bannerBrush)
+func staticColorHandler(child uintptr) uintptr {
+	procSetBkMode.Call(child, transparent)
+	id, _, _ := procGetDlgCtrlID.Call(child)
+	switch int(id) {
+	case idcLeftPanel, idcPortrait, idcLeftEyebrow, idcLeftTitle, idcLeftVersion:
+		if id == idcLeftEyebrow {
+			procSetTextColor.Call(child, 0x00CF4A68)
+		} else if id == idcLeftVersion {
+			procSetTextColor.Call(child, 0x00726A7D)
+		} else {
+			procSetTextColor.Call(child, 0x00251F35)
+		}
+		return uintptr(leftBrush)
+	case idcStepIndicator:
+		procSetTextColor.Call(child, 0x00CF4A68)
+	case idcHeaderDivider, idcFooterDivider:
+		return uintptr(dividerBrush)
+	case idcIncludedPanel:
+		return uintptr(surfaceBrush)
+	case idcValidation:
+		if validationError {
+			procSetTextColor.Call(child, 0x000020C0)
+		} else {
+			procSetTextColor.Call(child, 0x00726A7D)
+		}
+	case idcDescription, idcLocationNote, idcProgressDetail, idcInstallPath, idcSuccessBody, idcSuccessPath, idcErrorDetail:
+		procSetTextColor.Call(child, 0x00726A7D)
+	default:
+		procSetTextColor.Call(child, 0x00251F35)
 	}
-	procSetTextColor.Call(lParam, 0x00000000)
-	b, _, _ := procGetSysColorBrush.Call(15) // COLOR_BTNFACE
-	return b
+	return uintptr(rightBrush)
 }
 
-func refreshHandler(hwnd syscall.Handle, wParam uintptr) uintptr {
-	p := int(wParam)
-	procSendMessageW.Call(uintptr(controls[idcProgress]), pbmSetPos, uintptr(p), 0)
-	statusMtx.Lock()
-	txt := strings.Join(statusLog, "\r\n")
-	statusMtx.Unlock()
-	procSetWindowTextW.Call(uintptr(controls[idcStatus]), uintptr(unsafe.Pointer(utf16(txt))))
-	return 0
+func loadFonts() {
+	fontData := [][]byte{bundledFontRegular, bundledFontSemibold}
+	for _, data := range fontData {
+		if len(data) > 0 {
+			var count uint32
+			procAddFontMemResourceEx.Call(uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)), frPrivate, uintptr(unsafe.Pointer(&count)))
+		}
+	}
+	fontRegular = createFont(12, 400)
+	fontSemibold = createFont(12, 600)
 }
 
-func finishHandler(hwnd syscall.Handle, wParam uintptr) uintptr {
-	state = 2
-	procEnableWindow.Call(uintptr(controls[idcInstall]), 1)
-	procEnableWindow.Call(uintptr(controls[idcCancel]), 1)
-	if wParam == 0 {
-		procSetWindowTextW.Call(uintptr(controls[idcInstall]), uintptr(unsafe.Pointer(utf16("Close"))))
-		procMessageBoxW.Call(
-			uintptr(hwnd),
-			uintptr(unsafe.Pointer(utf16("Say Less installed successfully.\r\n\r\nOpen a new terminal and run:\r\n    sale --version"))),
-			uintptr(unsafe.Pointer(utf16("Say Less"))),
-			0x40, // MB_ICONINFORMATION
-		)
+func createFont(size, weight int32) syscall.Handle {
+	var value logFont
+	value.lfHeight = -int32(scaled(int(size)))
+	value.lfWeight = weight
+	value.lfCharSet = 1
+	value.lfOutPrecision = 3
+	value.lfClipPrecision = 2
+	value.lfQuality = 5
+	value.lfPitchAndFamily = 0
+	for i, char := range "GoogleSansCode NFP" {
+		value.lfFaceName[i] = uint16(char)
+	}
+	font, _, _ := procCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&value)))
+	return syscall.Handle(font)
+}
+
+func createBitmap(data []byte, width, height int) syscall.Handle {
+	decoded, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return 0
+	}
+	var info bitmapInfo
+	info.header.size = uint32(unsafe.Sizeof(info.header))
+	info.header.width = int32(width)
+	info.header.height = -int32(height)
+	info.header.planes = 1
+	info.header.bitCount = 32
+	info.header.compression = 0
+	bounds := decoded.Bounds()
+	scaledImage := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		sourceY := bounds.Min.Y + y*bounds.Dy()/height
+		for x := 0; x < width; x++ {
+			sourceX := bounds.Min.X + x*bounds.Dx()/width
+			scaledImage.SetNRGBA(x, y, color.NRGBAModel.Convert(decoded.At(sourceX, sourceY)).(color.NRGBA))
+		}
+	}
+	pixels := make([]byte, width*height*4)
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			pixel := scaledImage.NRGBAAt(x, y)
+			red := uint8((uint32(pixel.R)*uint32(pixel.A) + 255*(255-uint32(pixel.A))) / 255)
+			green := uint8((uint32(pixel.G)*uint32(pixel.A) + 255*(255-uint32(pixel.A))) / 255)
+			blue := uint8((uint32(pixel.B)*uint32(pixel.A) + 255*(255-uint32(pixel.A))) / 255)
+			offset := (y*width + x) * 4
+			pixels[offset] = blue
+			pixels[offset+1] = green
+			pixels[offset+2] = red
+			pixels[offset+3] = 0xFF
+		}
+	}
+	screenDC, _, _ := procGetDC.Call(0)
+	if screenDC == 0 {
+		return 0
+	}
+	var bits uintptr
+	bitmap, _, _ := procCreateDIBSection.Call(screenDC, uintptr(unsafe.Pointer(&info)), dibRgbColors, uintptr(unsafe.Pointer(&bits)), 0, 0)
+	procReleaseDC.Call(0, screenDC)
+	if bitmap == 0 || bits == 0 {
+		if bitmap != 0 {
+			procDeleteObject.Call(bitmap)
+		}
+		return 0
+	}
+	procRtlMoveMemory.Call(bits, uintptr(unsafe.Pointer(&pixels[0])), uintptr(len(pixels)))
+	return syscall.Handle(bitmap)
+}
+
+var imageSubclassCallback = syscall.NewCallback(imageSubclass)
+
+func imageSubclass(hwnd uintptr, message uint32, wParam, lParam uintptr, subclassID uintptr, refData uintptr) uintptr {
+	if message == wmPaint {
+		id, _, _ := procGetDlgCtrlID.Call(hwnd)
+		bitmap := portraitBitmap
+		if int(id) == idcLogo {
+			bitmap = logoBitmap
+		}
+		if bitmap != 0 {
+			var paint paintStruct
+			target, _, _ := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+			if target != 0 {
+				var client rect
+				procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client)))
+				memory, _, _ := procCreateCompatibleDC.Call(target)
+				if memory != 0 {
+					old, _, _ := procSelectObject.Call(memory, uintptr(bitmap))
+					procBitBlt.Call(target, 0, 0, uintptr(client.right), uintptr(client.bottom), memory, 0, 0, 0x00CC0020)
+					procSelectObject.Call(memory, old)
+					procDeleteObject.Call(memory)
+				}
+				procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+				return 1
+			}
+		}
+	}
+	result, _, _ := procDefSubclassProc.Call(hwnd, uintptr(message), wParam, lParam)
+	return result
+}
+
+func subclassImage(control syscall.Handle, id int) {
+	if control != 0 {
+		procSetWindowSubclass.Call(uintptr(control), imageSubclassCallback, uintptr(id), 0)
+	}
+}
+
+func newControl(id int, class, value string, style uintptr, x, y, width, height int, extended uintptr) {
+	control, _, _ := procCreateWindowExW.Call(
+		extended,
+		uintptr(unsafe.Pointer(utf16(class))),
+		uintptr(unsafe.Pointer(utf16(value))),
+		style|wsChild|wsVisible|wsClipSiblings,
+		uintptr(scaled(x)), uintptr(scaled(y)), uintptr(scaled(width)), uintptr(scaled(height)),
+		uintptr(mainHwnd), uintptr(id), uintptr(hInstance), 0,
+	)
+	controls[id] = syscall.Handle(control)
+	if control == 0 {
+		return
+	}
+	font := fontRegular
+	if id == idcTitle || id == idcLeftTitle || id == idcAboutHeading || id == idcLocationHeading ||
+		id == idcProgressHeading || id == idcSuccessHeading || id == idcStepIndicator || id == idcLocationLabel {
+		font = fontSemibold
+	}
+	if id == idcTitle {
+		procSendMessageW.Call(control, wmSetFont, uintptr(createFont(28, 600)), 1)
+	} else if id == idcLeftTitle || id == idcLogoFallback {
+		procSendMessageW.Call(control, wmSetFont, uintptr(createFont(19, 600)), 1)
+	} else if id == idcStepIndicator || id == idcLeftEyebrow || id == idcLocationLabel {
+		procSendMessageW.Call(control, wmSetFont, uintptr(createFont(10, 600)), 1)
+	} else if id == idcAboutHeading || id == idcLocationHeading || id == idcProgressHeading || id == idcSuccessHeading {
+		procSendMessageW.Call(control, wmSetFont, uintptr(createFont(13, 600)), 1)
+	} else if id == idcIncludedPanel {
+		procSendMessageW.Call(control, wmSetFont, uintptr(createFont(12, 400)), 1)
 	} else {
-		state = 0
-		procSetWindowTextW.Call(uintptr(controls[idcInstall]), uintptr(unsafe.Pointer(utf16("Install"))))
-		procMessageBoxW.Call(
-			uintptr(hwnd),
-			uintptr(unsafe.Pointer(utf16("Say Less installation failed.\r\nSee the message in the window for details."))),
-			uintptr(unsafe.Pointer(utf16("Say Less"))),
-			0x10, // MB_ICONERROR
-		)
+		procSendMessageW.Call(control, wmSetFont, uintptr(font), 1)
 	}
-	return 0
 }
 
-func onCancel(hwnd syscall.Handle) {
-	procDestroyWindow.Call(uintptr(hwnd))
+func createControls() {
+	newControl(idcLeftPanel, "STATIC", "", ssLeft, 0, 0, 340, 580, 0)
+	newControl(idcLeftEyebrow, "STATIC", "LANGUAGE INSTALLER", ssLeft, 30, 30, 250, 20, 0)
+	newControl(idcPortrait, "STATIC", "", ssBitmap|ssCenterImage, 26, 88, 288, 360, 0)
+	if portraitBitmap != 0 {
+		subclassImage(controls[idcPortrait], idcPortrait)
+	}
+	newControl(idcLeftTitle, "STATIC", "say_less", ssLeft, 30, 482, 250, 32, 0)
+	newControl(idcLeftVersion, "STATIC", "Version "+version, ssLeft, 30, 516, 250, 20, 0)
+
+	newControl(idcRightPanel, "STATIC", "", ssLeft, 340, 0, 580, 580, 0)
+	newControl(idcLogo, "STATIC", "", ssBitmap|ssCenterImage, 372, 25, 116, 58, 0)
+	if logoBitmap != 0 {
+		subclassImage(controls[idcLogo], idcLogo)
+		setVisible(idcLogo, true)
+	} else {
+		setVisible(idcLogo, false)
+	}
+	newControl(idcLogoFallback, "STATIC", "say_less", ssLeft, 372, 36, 160, 36, 0)
+	setVisible(idcLogoFallback, logoBitmap == 0)
+	newControl(idcStepIndicator, "STATIC", "STEP 1 / 3", ssPathEllipsis, 742, 43, 146, 24, 0)
+	newControl(idcTitle, "STATIC", "", ssPathEllipsis, 372, 126, 516, 38, 0)
+	newControl(idcDescription, "STATIC", "", ssLeft, 372, 172, 516, 42, 0)
+	newControl(idcHeaderDivider, "STATIC", "", ssLeft, 372, 220, 516, 1, 0)
+
+	newControl(idcAboutHeading, "STATIC", "A simpler way to build", ssLeft, 372, 250, 516, 24, 0)
+	newControl(idcAboutBody, "STATIC", "say_less is a small, fast general-purpose language designed for clear, expressive programs.\r\n\r\nThis installer adds the language compiler and its command-line tools to your computer.", ssLeft, 372, 284, 516, 88, 0)
+	newControl(idcIncludedPanel, "STATIC", "WHAT WILL BE INSTALLED\r\n\r\n  •  The say_less compiler and sale command\r\n  •  Runtime files in your selected folder", ssLeft, 372, 376, 516, 78, 0)
+	newControl(idcPathCheck, "BUTTON", "Add say_less to PATH", bsAutoCheckBox|wsTabstop, 372, 470, 300, 24, 0)
+	procSendMessageW.Call(uintptr(controls[idcPathCheck]), bmSetCheck, bstChecked, 0)
+
+	newControl(idcLocationHeading, "STATIC", "Select a destination", ssLeft, 372, 250, 516, 24, 0)
+	newControl(idcLocationLabel, "STATIC", "INSTALLATION LOCATION", ssLeft, 372, 288, 516, 20, 0)
+	newControl(idcLocationEdit, "EDIT", defaultInstallDir(), esAutohscroll|wsBorder|wsTabstop, 372, 316, 420, 32, wsExClientEdge)
+	newControl(idcBrowse, "BUTTON", "Browse", bsPushButton|wsTabstop, 804, 316, 84, 32, 0)
+	newControl(idcValidation, "STATIC", "Choose a writable folder on this computer.", ssPathEllipsis, 372, 356, 516, 22, 0)
+	newControl(idcLocationNote, "STATIC", "say_less will be installed in a bin folder inside this location.", ssPathEllipsis, 372, 402, 516, 22, 0)
+
+	newControl(idcProgressHeading, "STATIC", "Ready to install", ssLeft, 372, 252, 380, 28, 0)
+	newControl(idcProgress, "msctls_progress32", "", 0, 372, 298, 516, 22, 0)
+	procSendMessageW.Call(uintptr(controls[idcProgress]), pbmSetRange32, 0, 100)
+	procSendMessageW.Call(uintptr(controls[idcProgress]), pbmSetPos, 0, 0)
+	newControl(idcPercent, "STATIC", "0%", ssPathEllipsis, 818, 330, 70, 24, 0)
+	newControl(idcProgressDetail, "STATIC", "The bundled language runtime will be written to the selected folder.", ssPathEllipsis, 372, 360, 516, 24, 0)
+	newControl(idcInstallPath, "STATIC", "", ssPathEllipsis, 372, 402, 516, 24, 0)
+
+	newControl(idcSuccessHeading, "STATIC", "say_less has been installed successfully.", ssLeft, 372, 250, 516, 32, 0)
+	newControl(idcSuccessBody, "STATIC", "The language compiler is ready to use. Open a new terminal to run sale --version.", ssLeft, 372, 296, 516, 48, 0)
+	newControl(idcSuccessPath, "STATIC", "", ssPathEllipsis, 372, 360, 516, 24, 0)
+	newControl(idcErrorDetail, "STATIC", "", ssLeft, 372, 344, 516, 96, 0)
+
+	newControl(idcFooterDivider, "STATIC", "", ssLeft, 372, 500, 516, 1, 0)
+	newControl(idcBack, "BUTTON", "Back", bsPushButton|wsTabstop, 688, 525, 92, 32, 0)
+	newControl(idcAction, "BUTTON", "Next  →", bsPushButton|bsDefaultButton|wsTabstop, 796, 525, 92, 32, 0)
+}
+
+func registerClass() error {
+	class := windowClassEx{
+		cbSize:       uint32(unsafe.Sizeof(windowClassEx{})),
+		style:        0x0003,
+		lpfnWndProc:  syscall.NewCallback(windowProc),
+		hInstance:    hInstance,
+		pszClassName: utf16("SayLessSetup"),
+	}
+	icon, _, _ := procLoadIconW.Call(0, 32512)
+	cursor, _, _ := procLoadCursorW.Call(0, 32512)
+	class.hIcon = syscall.Handle(icon)
+	class.hIconSm = syscall.Handle(icon)
+	class.hCursor = syscall.Handle(cursor)
+	result, _, _ := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&class)))
+	if result == 0 {
+		return syscall.GetLastError()
+	}
+	return nil
+}
+
+func createWindow() error {
+	var controlsInit initCommonControlsEx
+	controlsInit.dwSize = uint32(unsafe.Sizeof(controlsInit))
+	controlsInit.dwICC = 0x00000020
+	procInitCommonControlsEx.Call(uintptr(unsafe.Pointer(&controlsInit)))
+
+	controls = make(map[int]syscall.Handle)
+	loadFonts()
+	if len(bundledLogo) > 0 {
+		logoBitmap = createBitmap(bundledLogo, scaled(116), scaled(58))
+	}
+	if len(bundledPortrait) > 0 {
+		portraitBitmap = createBitmap(bundledPortrait, scaled(288), scaled(360))
+	}
+
+	brushes := []struct {
+		color uintptr
+		brush *syscall.Handle
+	}{
+		{0x00FBF4F6, &leftBrush},
+		{0x00FFFFFF, &rightBrush},
+		{0x00FCFAFD, &surfaceBrush},
+		{0x00EAE5F0, &dividerBrush},
+		{0x00FFFFFF, &whiteBrush},
+	}
+	for _, item := range brushes {
+		brush, _, _ := procCreateSolidBrush.Call(item.color)
+		*item.brush = syscall.Handle(brush)
+	}
+
+	style := uintptr(wsOverlappedWindow &^ 0x00070000)
+	windowRect := rect{0, 0, int32(scaled(920)), int32(scaled(580))}
+	procAdjustWindowRectEx.Call(uintptr(unsafe.Pointer(&windowRect)), style, 0, 0)
+	width := windowRect.right - windowRect.left
+	height := windowRect.bottom - windowRect.top
+	screenWidth, _, _ := procGetSystemMetrics.Call(0)
+	screenHeight, _, _ := procGetSystemMetrics.Call(1)
+	x := (int(screenWidth) - int(width)) / 2
+	y := (int(screenHeight) - int(height)) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	window, _, _ := procCreateWindowExW.Call(
+		0,
+		uintptr(unsafe.Pointer(utf16("SayLessSetup"))),
+		uintptr(unsafe.Pointer(utf16("say_less "+version+" Setup"))),
+		style,
+		uintptr(x), uintptr(y), uintptr(width), uintptr(height),
+		0, 0, uintptr(hInstance), 0,
+	)
+	if window == 0 {
+		return syscall.GetLastError()
+	}
+	mainHwnd = syscall.Handle(window)
+	createControls()
+	setStep(stepIntro)
+	procShowWindow.Call(window, swShow)
+	procUpdateWindow.Call(window)
+	procSetFocus.Call(uintptr(controls[idcAction]))
+	return nil
+}
+
+func initializeDPI() {
+	procSetProcessDPIAware.Call()
+	fontScale = 96
+	if procGetDpiForSystem.Find() != nil {
+		dpi, _, _ := procGetDpiForSystem.Call()
+		if dpi >= 96 {
+			fontScale = int(dpi)
+		}
+	}
+	screenWidth, _, _ := procGetSystemMetrics.Call(0)
+	screenHeight, _, _ := procGetSystemMetrics.Call(1)
+	if screenWidth > 0 {
+		limit := (int(screenWidth) - 40) * 96 / 940
+		if limit < fontScale {
+			fontScale = limit
+		}
+	}
+	if screenHeight > 0 {
+		limit := (int(screenHeight) - 40) * 96 / 620
+		if limit < fontScale {
+			fontScale = limit
+		}
+	}
+	if fontScale < 48 {
+		fontScale = 48
+	}
+}
+
+func allTransientControls() []int {
+	return []int{
+		idcAboutHeading, idcAboutBody, idcIncludedPanel, idcPathCheck,
+		idcLocationHeading, idcLocationLabel, idcLocationEdit, idcBrowse, idcValidation, idcLocationNote,
+		idcProgressHeading, idcProgress, idcPercent, idcProgressDetail, idcInstallPath,
+		idcSuccessHeading, idcSuccessBody, idcSuccessPath, idcErrorDetail,
+	}
+}
+
+func showControls(ids ...int) {
+	for _, id := range ids {
+		setVisible(id, true)
+	}
+}
+
+func hideControls(ids ...int) {
+	for _, id := range ids {
+		setVisible(id, false)
+	}
+}
+
+func setStep(step int) {
+	currentStep = step
+	hideControls(allTransientControls()...)
+	setEnabled(idcBack, true)
+	setEnabled(idcAction, true)
+	switch step {
+	case stepIntro:
+		setText(idcStepIndicator, "STEP 1 / 3")
+		setText(idcTitle, "Welcome to say_less")
+		setText(idcDescription, "Install a small, fast language built for expressive and useful programs.")
+		showControls(idcAboutHeading, idcAboutBody, idcIncludedPanel, idcPathCheck)
+		setVisible(idcBack, false)
+		setText(idcAction, "Next  →")
+	case stepLocation:
+		validationError = false
+		setText(idcValidation, "Choose a writable folder on this computer.")
+		setText(idcStepIndicator, "STEP 2 / 3")
+		setText(idcTitle, "Choose where say_less lives")
+		setText(idcDescription, "Select the folder where the language compiler and command-line tools will be installed.")
+		showControls(idcLocationHeading, idcLocationLabel, idcLocationEdit, idcBrowse, idcValidation, idcLocationNote)
+		setText(idcBack, "Back")
+		setText(idcAction, "Next  →")
+	case stepInstall:
+		showReadyState()
+	}
+}
+
+func showReadyState() {
+	installStatus = installReady
+	statusMutex.Lock()
+	installError = ""
+	statusMutex.Unlock()
+	setText(idcStepIndicator, "STEP 3 / 3")
+	setText(idcTitle, "Install say_less")
+	setText(idcDescription, "The language runtime will be installed in the same window. No additional setup is required.")
+	setText(idcProgressHeading, "Ready to install")
+	setText(idcProgressDetail, "The bundled language runtime will be written to the selected folder.")
+	setText(idcInstallPath, "Destination: "+filepath.Join(selectedDir, "bin"))
+	showControls(idcProgressHeading, idcProgress, idcPercent, idcProgressDetail, idcInstallPath)
+	setVisible(idcBack, true)
+	setText(idcBack, "Back")
+	setText(idcAction, "Install")
+	setEnabled(idcBack, true)
+	setEnabled(idcAction, true)
+	updateProgressUI(0)
+}
+
+func onBack() {
+	if installStatus == installRunning {
+		return
+	}
+	switch currentStep {
+	case stepLocation:
+		setStep(stepIntro)
+	case stepInstall:
+		if installStatus == installDone {
+			procDestroyWindow.Call(uintptr(mainHwnd))
+			return
+		}
+		if installStatus == installFailed {
+			procDestroyWindow.Call(uintptr(mainHwnd))
+			return
+		}
+		setStep(stepLocation)
+	}
+	procSetFocus.Call(uintptr(controls[idcAction]))
+}
+
+func onAction() {
+	if installStatus == installRunning {
+		return
+	}
+	switch currentStep {
+	case stepIntro:
+		addToPath = getCheck(idcPathCheck)
+		setStep(stepLocation)
+		procSetFocus.Call(uintptr(controls[idcLocationEdit]))
+	case stepLocation:
+		dir, err := validateInstallDir(getEditText(idcLocationEdit))
+		if err != nil {
+			validationError = true
+			setText(idcValidation, err.Error())
+			procSetFocus.Call(uintptr(controls[idcLocationEdit]))
+			return
+		}
+		validationError = false
+		selectedDir = dir
+		setText(idcLocationEdit, dir)
+		setStep(stepInstall)
+		procSetFocus.Call(uintptr(controls[idcAction]))
+	case stepInstall:
+		switch installStatus {
+		case installDone:
+			procDestroyWindow.Call(uintptr(mainHwnd))
+		case installReady, installFailed:
+			startInstallation()
+		}
+	}
 }
 
 func onBrowse(hwnd syscall.Handle) {
-	var bi browseInfo
-	bi.HWndOwner = uintptr(hwnd)
-	var disp [260]uint16
-	bi.PszDisplayName = &disp[0]
-	bi.LpszTitle = utf16("Select the folder where Say Less should be installed")
-	bi.UlFlags = 0x0001 | 0x0040 // BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE
-	pidl, _, _ := procSHBrowseForFolderW.Call(uintptr(unsafe.Pointer(&bi)))
+	var info browseInfo
+	info.hwndOwner = uintptr(hwnd)
+	info.lpszTitle = utf16("Select where say_less should be installed")
+	info.ulFlags = 0x0001 | 0x0040
+	pidl, _, _ := procSHBrowseForFolderW.Call(uintptr(unsafe.Pointer(&info)))
 	if pidl == 0 {
 		return
 	}
-	var path [260]uint16
-	r, _, _ := procSHGetPathFromIDListW.Call(pidl, uintptr(unsafe.Pointer(&path[0])))
-	if r != 0 {
-		procSetWindowTextW.Call(uintptr(controls[idcEditDir]), uintptr(unsafe.Pointer(&path[0])))
-	}
-	procCoTaskMemFree.Call(pidl)
-}
-
-func onInstall(hwnd syscall.Handle) {
-	switch state {
-	case 0:
-		startInstall()
-	case 2:
-		procDestroyWindow.Call(uintptr(hwnd))
+	defer procCoTaskMemFree.Call(pidl)
+	buffer := make([]uint16, 32768)
+	result, _, _ := procSHGetPathFromIDListW.Call(pidl, uintptr(unsafe.Pointer(&buffer[0])))
+	if result != 0 {
+		setText(idcLocationEdit, syscall.UTF16ToString(buffer))
+		validationError = false
+		setText(idcValidation, "Choose a writable folder on this computer.")
 	}
 }
 
-func startInstall() {
-	state = 1
-	procEnableWindow.Call(uintptr(controls[idcInstall]), 0)
-	procEnableWindow.Call(uintptr(controls[idcCancel]), 0)
-	procEnableWindow.Call(uintptr(controls[idcEditDir]), 0)
-	procEnableWindow.Call(uintptr(controls[idcBrowse]), 0)
-	procEnableWindow.Call(uintptr(controls[idcChkPath]), 0)
-
-	dir := strings.TrimSpace(getEditText(idcEditDir))
-	if dir == "" {
-		dir = defaultInstallDir()
+func validateInstallDir(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("Choose an installation folder.")
 	}
-	addPath := getCheck(idcChkPath) == bSTChecked
-	go runInstall(dir, addPath)
-}
-
-func setText(id int, s string) {
-	if h := controls[id]; h != 0 {
-		procSetWindowTextW.Call(uintptr(h), uintptr(unsafe.Pointer(utf16(s))))
+	if !filepath.IsAbs(value) {
+		return "", fmt.Errorf("Use a complete local path, such as C:\\SayLess.")
 	}
-}
-
-func appendStatus(line string) {
-	statusMtx.Lock()
-	statusLog = append(statusLog, line)
-	statusMtx.Unlock()
-}
-
-func postProgress(p int, line string) {
-	appendStatus(line)
-	procPostMessageW.Call(uintptr(mainHwnd), wmRefresh, uintptr(p), 0)
-}
-
-func getEditText(id int) string {
-	h := uintptr(controls[id])
-	if h == 0 {
-		return ""
+	clean := filepath.Clean(value)
+	if filepath.VolumeName(clean) == "" || strings.HasPrefix(clean, `\\`) {
+		return "", fmt.Errorf("Use a complete local path, such as C:\\SayLess.")
 	}
-	n, _, _ := procGetWindowTextLengthW.Call(h)
-	if n == 0 {
-		return ""
+	if filepath.Dir(clean) == clean {
+		return "", fmt.Errorf("Choose a folder inside your user or program directories.")
 	}
-	buf := make([]uint16, n+2)
-	procGetWindowTextW.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(n+1))
-	return syscall.UTF16ToString(buf)
+	writablePath := clean
+	if info, err := os.Stat(clean); err == nil {
+		if !info.IsDir() {
+			return "", fmt.Errorf("This path points to a file. Choose a folder instead.")
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("This folder cannot be used: %v", err)
+	} else {
+		parent := filepath.Dir(clean)
+		for {
+			info, statErr := os.Stat(parent)
+			if statErr == nil {
+				if !info.IsDir() {
+					return "", fmt.Errorf("A parent of this path points to a file.")
+				}
+				writablePath = parent
+				break
+			}
+			if !os.IsNotExist(statErr) {
+				return "", fmt.Errorf("This folder cannot be used: %v", statErr)
+			}
+			next := filepath.Dir(parent)
+			if next == parent {
+				break
+			}
+			parent = next
+		}
+	}
+	probe, err := os.CreateTemp(writablePath, ".sayless-write-test-*")
+	if err != nil {
+		return "", fmt.Errorf("This folder is not writable: %v", err)
+	}
+	probePath := probe.Name()
+	if err := probe.Close(); err != nil {
+		_ = os.Remove(probePath)
+		return "", fmt.Errorf("This folder is not writable: %v", err)
+	}
+	if err := os.Remove(probePath); err != nil {
+		return "", fmt.Errorf("This folder is not writable: %v", err)
+	}
+	return clean, nil
 }
 
-func getCheck(id int) uintptr {
-	r, _, _ := procSendMessageW.Call(uintptr(controls[id]), bmGetCheck, 0, 0)
-	return r
+func startInstallation() {
+	installStatus = installRunning
+	statusMutex.Lock()
+	installError = ""
+	statusMutex.Unlock()
+	hideControls(idcSuccessHeading, idcSuccessBody, idcSuccessPath, idcErrorDetail)
+	showControls(idcProgressHeading, idcProgress, idcPercent, idcProgressDetail, idcInstallPath)
+	setText(idcTitle, "Installing say_less")
+	setText(idcDescription, "Please keep this window open while say_less is installed.")
+	setText(idcProgressHeading, "Installing say_less")
+	setText(idcProgressDetail, "Preparing the bundled language runtime...")
+	setInstallerStatus("Preparing installation...", "Preparing the bundled language runtime...")
+	setText(idcAction, "Installing...")
+	setEnabled(idcAction, false)
+	setEnabled(idcBack, false)
+	updateProgressUI(0)
+	go runInstallation(selectedDir, addToPath)
+}
+
+func (writer *progressWriter) Write(data []byte) (int, error) {
+	written, err := writer.destination.Write(data)
+	writer.written += int64(written)
+	if written > 0 && writer.update != nil {
+		writer.update(writer.written, writer.total)
+	}
+	return written, err
+}
+
+func openPayload() (payloadSource, error) {
+	if len(bundledPayload) > 0 {
+		return payloadSource{reader: io.NopCloser(bytes.NewReader(bundledPayload)), size: int64(len(bundledPayload))}, nil
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return payloadSource{}, err
+	}
+	path := filepath.Join(filepath.Dir(executable), "sale.exe")
+	file, err := os.Open(path)
+	if err != nil {
+		return payloadSource{}, fmt.Errorf("no bundled sale.exe found; release builds include it inside the installer")
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return payloadSource{}, err
+	}
+	return payloadSource{reader: file, size: info.Size()}, nil
+}
+
+func runInstallation(installDir string, addPath bool) {
+	payload, err := openPayload()
+	if err != nil {
+		postInstallFailure(err)
+		return
+	}
+	defer payload.reader.Close()
+
+	binDir := filepath.Join(installDir, "bin")
+	postInstallProgress(2, "Preparing installation folder...", "Creating "+binDir)
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		postInstallFailure(fmt.Errorf("could not create %s: %v", binDir, err))
+		return
+	}
+	if payload.size <= 0 {
+		postInstallFailure(fmt.Errorf("the bundled sale.exe is empty"))
+		return
+	}
+
+	tempPath := filepath.Join(binDir, "sale.exe.installing")
+	_ = os.Remove(tempPath)
+	file, err := os.OpenFile(tempPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
+	if err != nil {
+		postInstallFailure(fmt.Errorf("could not start writing sale.exe: %v", err))
+		return
+	}
+	writer := &progressWriter{destination: file, total: payload.size}
+	writer.update = func(written, total int64) {
+		percent := 5 + int(written*74/total)
+		if percent > 79 {
+			percent = 79
+		}
+		postInstallProgress(percent, "Writing sale.exe...", fmt.Sprintf("%.1f MB of %.1f MB", float64(written)/(1024*1024), float64(total)/(1024*1024)))
+	}
+	_, copyErr := io.CopyBuffer(writer, readerOnly{payload.reader}, make([]byte, 128*1024))
+	if copyErr == nil && writer.written != payload.size {
+		copyErr = fmt.Errorf("expected %d bytes but wrote %d", payload.size, writer.written)
+	}
+	if copyErr == nil {
+		copyErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if copyErr != nil {
+		_ = os.Remove(tempPath)
+		postInstallFailure(fmt.Errorf("could not write sale.exe: %v", copyErr))
+		return
+	}
+	if closeErr != nil {
+		_ = os.Remove(tempPath)
+		postInstallFailure(fmt.Errorf("could not finish writing sale.exe: %v", closeErr))
+		return
+	}
+	tempInfo, err := os.Stat(tempPath)
+	if err != nil || tempInfo.Size() != payload.size {
+		_ = os.Remove(tempPath)
+		postInstallFailure(fmt.Errorf("the installed file did not pass its size check"))
+		return
+	}
+	postInstallProgress(82, "Verifying the installed file...", fmt.Sprintf("%d bytes written", writer.written))
+	finalPath := filepath.Join(binDir, "sale.exe")
+	moved, _, moveError := procMoveFileExW.Call(uintptr(unsafe.Pointer(utf16(tempPath))), uintptr(unsafe.Pointer(utf16(finalPath))), 0x00000001|0x00000008)
+	if moved == 0 {
+		_ = os.Remove(tempPath)
+		postInstallFailure(fmt.Errorf("could not finalize sale.exe: %v", moveError))
+		return
+	}
+	finalInfo, err := os.Stat(finalPath)
+	if err != nil || finalInfo.Size() != payload.size {
+		postInstallFailure(fmt.Errorf("the finalized sale.exe could not be verified"))
+		return
+	}
+	postInstallProgress(88, "Finalizing installation...", finalPath)
+
+	if addPath {
+		postInstallProgress(90, "Updating PATH...", "Adding "+binDir)
+		scope, err := addDirToPath(binDir)
+		if err != nil {
+			postInstallFailure(fmt.Errorf("could not update PATH: %v", err))
+			return
+		}
+		postInstallProgress(96, "Finalizing installation...", scope+" PATH updated")
+	} else {
+		postInstallProgress(96, "Finalizing installation...", "PATH was left unchanged")
+	}
+	postInstallProgress(100, "Installation complete", finalPath)
+	procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 0, 0)
+}
+
+func addDirToPath(dir string) (string, error) {
+	if isElevated() {
+		return "System", addDirToSystemPath(dir)
+	}
+	updated, err := runElevatedPath(dir)
+	if err != nil {
+		return "", err
+	}
+	if updated {
+		return "System", nil
+	}
+	return "User", addDirToUserPath(dir)
 }
 
 func isElevated() bool {
-	// TOKEN_QUERY | GetTokenInformation(TokenElevation)
-	tokenQuery := uint32(0x0008)
-	tokenElevation := uint32(20)
-	curProc, _, _ := procGetCurrentProcess.Call()
-	var tok syscall.Handle
-	if r, _, _ := procOpenProcessToken.Call(curProc, uintptr(tokenQuery), uintptr(unsafe.Pointer(&tok))); r == 0 {
+	process, _, _ := procGetCurrentProcess.Call()
+	var token syscall.Handle
+	result, _, _ := procOpenProcessToken.Call(process, 0x0008, uintptr(unsafe.Pointer(&token)))
+	if result == 0 {
 		return false
 	}
-	defer procCloseHandle.Call(uintptr(tok))
-	var elev uint32
-	var sz uint32
-	if r, _, _ := procGetTokenInformation.Call(uintptr(tok), uintptr(tokenElevation), uintptr(unsafe.Pointer(&elev)), 4, uintptr(unsafe.Pointer(&sz))); r == 0 {
-		return false
-	}
-	return elev != 0
+	defer procCloseHandle.Call(uintptr(token))
+	var elevated uint32
+	var size uint32
+	result, _, _ = procGetTokenInformation.Call(uintptr(token), 20, uintptr(unsafe.Pointer(&elevated)), 4, uintptr(unsafe.Pointer(&size)))
+	return result != 0 && elevated != 0
 }
 
-// runElevatedPath relaunches this same exe as administrator with --worker so it
-// can update the SYSTEM PATH. Returns true if the elevated copy succeeded.
-func runElevatedPath(binDir string) bool {
-	exe, err := os.Executable()
+func runElevatedPath(binDir string) (bool, error) {
+	executable, err := os.Executable()
 	if err != nil {
-		return false
+		return false, err
 	}
-	params := "--worker \"" + binDir + "\""
+	var info shellExecuteInfo
+	info.cbSize = uint32(unsafe.Sizeof(info))
+	info.fMask = seeMaskNoProcess
+	info.hwnd = uintptr(mainHwnd)
+	info.lpVerb = utf16("runas")
+	info.lpFile = utf16(executable)
+	info.lpParameters = utf16("--worker " + quoteWindowsArgument(binDir))
+	info.nShow = swHide
+	result, _, _ := procShellExecuteExW.Call(uintptr(unsafe.Pointer(&info)))
+	if result == 0 || info.hProcess == 0 {
+		return false, nil
+	}
+	waitResult, _, _ := procWaitForSingleObject.Call(info.hProcess, 0xFFFFFFFF)
+	if waitResult != 0 {
+		procCloseHandle.Call(info.hProcess)
+		return false, fmt.Errorf("the elevated PATH update could not be completed")
+	}
+	var exitCode uint32
+	exitResult, _, _ := procGetExitCodeProcess.Call(info.hProcess, uintptr(unsafe.Pointer(&exitCode)))
+	procCloseHandle.Call(info.hProcess)
+	if exitResult == 0 {
+		return false, fmt.Errorf("the elevated PATH update result could not be read")
+	}
+	if exitCode != 0 {
+		return false, fmt.Errorf("the elevated PATH update failed")
+	}
+	return true, nil
+}
 
-	var sei shellExecuteInfo
-	sei.CbSize = uint32(unsafe.Sizeof(sei))
-	sei.FMask = 0x00000040 // SEE_MASK_NOCLOSEPROCESS (keeps us a handle to wait on)
-	sei.HWnd = uintptr(mainHwnd)
-	sei.LpVerb = utf16("runas")
-	sei.LpFile = utf16(exe)
-	sei.LpParameters = utf16(params)
-	sei.NShow = swHidden
-
-	ok, _, _ := procShellExecuteExW.Call(uintptr(unsafe.Pointer(&sei)))
-	if ok == 0 {
-		return false
-	}
-	if sei.HProcess == 0 {
-		return false
-	}
-	procWaitForSingleObject.Call(sei.HProcess, 300000)
-	var code uint32
-	procGetExitCodeProcess.Call(sei.HProcess, uintptr(unsafe.Pointer(&code)))
-	procCloseHandle.Call(sei.HProcess)
-	return code == 0
+func quoteWindowsArgument(value string) string {
+	return "\"" + strings.ReplaceAll(value, "\"", "\\\"") + "\""
 }
 
 func defaultInstallDir() string {
@@ -450,316 +1204,199 @@ func defaultInstallDir() string {
 	if base == "" {
 		base = os.Getenv("USERPROFILE")
 	}
+	if base == "" {
+		return filepath.Clean("say_less")
+	}
 	return filepath.Join(base, "Programs", "SayLess")
 }
 
-// ---- installation ----
-
-func runInstall(installDir string, addPath bool) {
-	postProgress(2, "Preparing to install Say Less...")
-
-	payload, err := resolvePayload()
-	if err != nil {
-		postProgress(0, "Error: "+err.Error())
-		procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 1, 0)
-		return
-	}
-
-	binDir := filepath.Join(installDir, "bin")
-	if err := os.MkdirAll(binDir, 0755); err != nil {
-		postProgress(0, "Error: "+err.Error())
-		procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 1, 0)
-		return
-	}
-
-	salePath := filepath.Join(binDir, "sale.exe")
-	postProgress(30, "Copying sale.exe to "+binDir+" ...")
-	if err := os.WriteFile(salePath, payload, 0755); err != nil {
-		postProgress(0, "Error: "+err.Error())
-		procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 1, 0)
-		return
-	}
-
-	if addPath {
-		postProgress(60, "Adding "+binDir+" to your system PATH...")
-		if isElevated() {
-			if err := addDirToSystemPath(binDir); err != nil {
-				postProgress(0, "Error: "+err.Error())
-				procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 1, 0)
-				return
-			}
-		} else {
-			postProgress(60, "Requesting administrator permission to update your PATH...")
-			if runElevatedPath(binDir) {
-				postProgress(80, "PATH updated by an elevated Say Less copy.")
-			} else {
-				postProgress(80, "Admin prompt declined — adding to your personal PATH instead.")
-				if err := addDirToUserPath(binDir); err != nil {
-					postProgress(0, "Error: "+err.Error())
-					procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 1, 0)
-					return
-				}
-			}
-		}
-	}
-
-	postProgress(100, "Installation complete. You can now run 'sale' from any terminal.")
-	procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 0, 0)
-}
-
-func resolvePayload() ([]byte, error) {
-	if len(bundledPayload) > 0 {
-		return bundledPayload, nil
-	}
-	exe, err := os.Executable()
-	if err == nil {
-		nextTo := filepath.Join(filepath.Dir(exe), "sale.exe")
-		if b, err := os.ReadFile(nextTo); err == nil {
-			return b, nil
-		}
-	}
-	return nil, fmt.Errorf("no bundled sale.exe found; release builds embed the language binary")
-}
-
 func addDirToUserPath(dir string) error {
-	k, err := regOpen(hKEYCurrentUser, "Environment", kEYRead|kEYWrite)
+	key, err := registryOpen(hkeyCurrentUser, "Environment", keyRead|keyWrite)
 	if err != nil {
 		return err
 	}
-	defer procRegCloseKey.Call(k)
-	return appendToPath(k, dir)
+	defer procRegCloseKey.Call(key)
+	return appendToPath(key, dir)
 }
 
 func addDirToSystemPath(dir string) error {
-	k, err := regOpen(hKEYLocalMachine, environmentKey, kEYRead|kEYWrite)
+	key, err := registryOpen(hkeyLocalMachine, environmentKey, keyRead|keyWrite)
 	if err != nil {
 		return err
 	}
-	defer procRegCloseKey.Call(k)
-	return appendToPath(k, dir)
+	defer procRegCloseKey.Call(key)
+	return appendToPath(key, dir)
 }
 
-func appendToPath(k uintptr, dir string) error {
-	cur, err := regQuery(k, "Path")
-	if err == eRRorFileNotFound {
-		cur = ""
+func appendToPath(key uintptr, dir string) error {
+	current, err := registryQuery(key, "Path")
+	if err == errorFileNotFound {
+		current = ""
 	} else if err != nil {
 		return err
 	}
-
-	if !pathInList(cur, dir) {
-		if cur != "" && !strings.HasSuffix(cur, ";") {
-			cur += ";"
+	if !pathInList(current, dir) {
+		if current != "" && !strings.HasSuffix(current, ";") {
+			current += ";"
 		}
-		cur += dir
-		if err := regSet(k, "Path", cur); err != nil {
+		if err := registrySet(key, "Path", current+dir); err != nil {
 			return err
 		}
 	}
-
 	var result uintptr
-	procSendMessageTimeoutW.Call(
-		0xFFFF, // HWND_BROADCAST
-		wmSettingChange,
-		0,
-		uintptr(unsafe.Pointer(utf16("Environment"))),
-		0x0002, // SMTO_ABORTIFHUNG
-		5000,
-		uintptr(unsafe.Pointer(&result)),
-	)
+	procSendMessageTimeoutW.Call(0xFFFF, wmSettingChange, 0, uintptr(unsafe.Pointer(utf16("Environment"))), 0x0002, 5000, uintptr(unsafe.Pointer(&result)))
 	return nil
 }
 
 func pathInList(list, dir string) bool {
-	dl := strings.ToLower(dir)
-	for _, p := range strings.Split(list, ";") {
-		if strings.ToLower(strings.TrimSpace(p)) == dl {
+	target := strings.TrimSpace(dir)
+	for _, item := range strings.Split(list, ";") {
+		if strings.EqualFold(target, strings.TrimSpace(item)) {
 			return true
 		}
 	}
 	return false
 }
 
-func regOpen(root uintptr, subkey string, access uint32) (uintptr, error) {
-	var k uintptr
-	r, _, _ := procRegOpenKeyExW.Call(
-		root,
-		uintptr(unsafe.Pointer(utf16(subkey))),
-		0,
-		uintptr(access),
-		uintptr(unsafe.Pointer(&k)),
-	)
-	if r != 0 {
-		return 0, fmt.Errorf("registry open failed (%v)", r)
+func registryOpen(root uintptr, subkey string, access uint32) (uintptr, error) {
+	var key uintptr
+	result, _, _ := procRegOpenKeyExW.Call(root, uintptr(unsafe.Pointer(utf16(subkey))), 0, uintptr(access), uintptr(unsafe.Pointer(&key)))
+	if result != 0 {
+		return 0, fmt.Errorf("registry open failed (%v)", result)
 	}
-	return k, nil
+	return key, nil
 }
 
-func regQuery(k uintptr, name string) (string, error) {
+func registryQuery(key uintptr, name string) (string, error) {
 	var size uint32
-	r, _, _ := procRegQueryValueExW.Call(
-		k,
-		uintptr(unsafe.Pointer(utf16(name))),
-		0, 0, 0,
-		uintptr(unsafe.Pointer(&size)),
-	)
-	if r == uintptr(eRRorFileNotFound) {
-		return "", eRRorFileNotFound
+	result, _, _ := procRegQueryValueExW.Call(key, uintptr(unsafe.Pointer(utf16(name))), 0, 0, 0, uintptr(unsafe.Pointer(&size)))
+	if result == uintptr(errorFileNotFound) {
+		return "", errorFileNotFound
 	}
-	if r != 0 {
-		return "", fmt.Errorf("registry query failed (%v)", r)
+	if result != 0 {
+		return "", fmt.Errorf("registry query failed (%v)", result)
 	}
-	buf := make([]uint16, size/2+2)
-	r2, _, _ := procRegQueryValueExW.Call(
-		k,
-		uintptr(unsafe.Pointer(utf16(name))),
-		0, 0,
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
-	)
-	if r2 != 0 {
-		return "", fmt.Errorf("registry query failed (%v)", r2)
+	buffer := make([]uint16, size/2+2)
+	result, _, _ = procRegQueryValueExW.Call(key, uintptr(unsafe.Pointer(utf16(name))), 0, 0, uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&size)))
+	if result != 0 {
+		return "", fmt.Errorf("registry query failed (%v)", result)
 	}
-	return syscall.UTF16ToString(buf), nil
+	return syscall.UTF16ToString(buffer), nil
 }
 
-func regSet(k uintptr, name, value string) error {
-	u, _ := syscall.UTF16FromString(value)
-	data := make([]byte, len(u)*2)
-	for i, c := range u {
-		data[i*2] = byte(c)
-		data[i*2+1] = byte(c >> 8)
+func registrySet(key uintptr, name, value string) error {
+	utf16Value, _ := syscall.UTF16FromString(value)
+	data := make([]byte, len(utf16Value)*2)
+	for i, value := range utf16Value {
+		data[i*2] = byte(value)
+		data[i*2+1] = byte(value >> 8)
 	}
-	r, _, _ := procRegSetValueExW.Call(
-		k,
-		uintptr(unsafe.Pointer(utf16(name))),
-		0,
-		uintptr(rEGExpandSz),
-		uintptr(unsafe.Pointer(&data[0])),
-		uintptr(len(data)),
-	)
-	if r != 0 {
-		return fmt.Errorf("registry set failed (%v)", r)
+	result, _, _ := procRegSetValueExW.Call(key, uintptr(unsafe.Pointer(utf16(name))), 0, uintptr(regExpandSz), uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)))
+	if result != 0 {
+		return fmt.Errorf("registry write failed (%v)", result)
 	}
 	return nil
 }
 
-// ---- window setup ----
+func setInstallerStatus(status, detail string) {
+	statusMutex.Lock()
+	statusText = status
+	detailText = detail
+	statusMutex.Unlock()
+}
 
-var className = utf16("SayLessSetupW")
+func postInstallProgress(percent int, status, detail string) {
+	statusMutex.Lock()
+	statusText = status
+	detailText = detail
+	statusPercent = percent
+	statusMutex.Unlock()
+	procPostMessageW.Call(uintptr(mainHwnd), wmRefresh, 0, 0)
+}
 
-func registerClass() error {
-	wc := wndClassEx{}
-	wc.CbSize = uint32(unsafe.Sizeof(wc))
-	wc.LpfnWndProc = syscall.NewCallback(wndProc)
-	wc.HInstance = hInstance
-	hIcon, _, _ := procLoadIconW.Call(0, 32512)     // IDI_APPLICATION
-	hCursor, _, _ := procLoadCursorW.Call(0, 32512) // IDC_ARROW
-	brush, _, _ := procGetSysColorBrush.Call(15)    // COLOR_BTNFACE
-	wc.HIcon = syscall.Handle(hIcon)
-	wc.HCursor = syscall.Handle(hCursor)
-	wc.HbrBackground = syscall.Handle(brush)
-	wc.LpszClassName = className
-	r, _, _ := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
-	if r == 0 {
-		return syscall.GetLastError()
+func postInstallFailure(err error) {
+	statusMutex.Lock()
+	installError = err.Error()
+	statusText = "Installation stopped"
+	detailText = err.Error()
+	statusPercent = 0
+	statusMutex.Unlock()
+	procPostMessageW.Call(uintptr(mainHwnd), wmRefresh, 0, 0)
+	procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 1, 0)
+}
+
+func updateProgressUI(percent int) {
+	statusMutex.Lock()
+	status := statusText
+	detail := detailText
+	statusMutex.Unlock()
+	renderProgress(percent, status, detail)
+}
+
+func renderProgress(percent int, status, detail string) {
+	if percent < 0 {
+		percent = 0
 	}
-	return nil
-}
-
-func createWindow() error {
-	var icc initCommonControlsEx
-	icc.DwSize = uint32(unsafe.Sizeof(icc))
-	icc.DwICC = 0x00000020 // ICC_PROGRESS_CLASS
-	procInitCommonControlsEx.Call(uintptr(unsafe.Pointer(&icc)))
-
-	h, _, _ := procCreateWindowExW.Call(
-		0,
-		uintptr(unsafe.Pointer(className)),
-		uintptr(unsafe.Pointer(utf16("Say Less "+version+" Setup"))),
-		wsOverlappedWindow|wsVisible,
-		160, 120, 540, 400,
-		0, 0, uintptr(hInstance), 0,
-	)
-	if h == 0 {
-		return syscall.GetLastError()
+	if percent > 100 {
+		percent = 100
 	}
-	mainHwnd = syscall.Handle(h)
-
-	classFontH, _, _ := procGetStockObject.Call(17) // DEFAULT_GUI_FONT
-	classFont = syscall.Handle(classFontH)
-	titleFont = createTitleFont()
-	bannerBrushH, _, _ := procCreateSolidBrush.Call(0x00FF1C58) // Say Less purple RGB(88,28,255)
-	bannerBrush = syscall.Handle(bannerBrushH)
-
-	createControls()
-
-	procShowWindow.Call(h, swShow)
-	procUpdateWindow.Call(h)
-	return nil
-}
-
-func createTitleFont() syscall.Handle {
-	var lf logFont
-	lf.LfHeight = -24
-	lf.LfWeight = 700
-	lf.LfCharSet = 1 // DEFAULT_CHARSET
-	for i, c := range "Segoe UI" {
-		if i >= 31 {
-			break
-		}
-		lf.LfFaceName[i] = uint16(c)
+	progressPosition = percent
+	procSendMessageW.Call(uintptr(controls[idcProgress]), pbmSetPos, uintptr(percent), 0)
+	setText(idcPercent, fmt.Sprintf("%d%%", percent))
+	if status != "" {
+		setText(idcProgressHeading, status)
 	}
-	f, _, _ := procCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&lf)))
-	return syscall.Handle(f)
-}
-
-func newControl(id int, class, text string, style uintptr, x, y, w, h int, extra uintptr) {
-	hCtrl, _, _ := procCreateWindowExW.Call(
-		extra,
-		uintptr(unsafe.Pointer(utf16(class))),
-		uintptr(unsafe.Pointer(utf16(text))),
-		style|wsChild|wsVisible,
-		uintptr(x), uintptr(y), uintptr(w), uintptr(h),
-		uintptr(mainHwnd),
-		uintptr(id),
-		uintptr(hInstance), 0,
-	)
-	controls[id] = syscall.Handle(hCtrl)
-
-	font := classFont
-	if id == idcTitle || id == idcSubtitle {
-		font = titleFont
+	if detail != "" {
+		setText(idcProgressDetail, detail)
 	}
-	procSendMessageW.Call(hCtrl, wmSetfont, uintptr(font), 1)
 }
 
-func createControls() {
-	controls = make(map[int]syscall.Handle)
-
-	// Banner band (Say Less purple with white title)
-	newControl(idcBanner, "STATIC", "", ssLeft, 0, 0, 540, 70, 0)
-	newControl(idcTitle, "STATIC", "Say Less", ssLeft, 18, 8, 320, 34, 0)
-	newControl(idcSubtitle, "STATIC", "Tiny, fast general-purpose language", ssLeft, 18, 44, 400, 20, 0)
-
-	// Form area
-	newControl(idcLabelDir, "STATIC", "Installation directory:", ssLeft, 96, 96, 320, 18, 0)
-	newControl(idcEditDir, "EDIT", defaultInstallDir(), esAutohscroll|wsBorder, 96, 116, 380, 24, wsExClientEdge)
-	newControl(idcBrowse, "BUTTON", "Browse...", bsPushButton|wsTabstop, 486, 116, 40, 24, 0)
-	newControl(idcChkPath, "BUTTON", "Add sale to your PATH (recommended)", bsAcheckbox|wsTabstop, 96, 152, 380, 20, 0)
-	procSendMessageW.Call(uintptr(controls[idcChkPath]), bmSetCheck, bSTChecked, 0)
-
-	newControl(idcStatus, "STATIC", "Click Install to start.", ssLeft, 96, 190, 430, 84, 0)
-	newControl(idcProgress, "msctls_progress32", "", 0, 96, 280, 430, 16, 0)
-	procSendMessageW.Call(uintptr(controls[idcProgress]), pbmSetRange32, 0, 100)
-	procSendMessageW.Call(uintptr(controls[idcProgress]), pbmSetPos, 0, 0)
-
-	newControl(idcInstall, "BUTTON", "Install", bsPushButton|wsTabstop, 336, 320, 88, 28, 0)
-	newControl(idcCancel, "BUTTON", "Cancel", bsPushButton|wsTabstop, 436, 320, 88, 28, 0)
+func refreshInstaller(uintptr) {
+	statusMutex.Lock()
+	percent := statusPercent
+	status := statusText
+	detail := detailText
+	statusMutex.Unlock()
+	renderProgress(percent, status, detail)
 }
 
-// Worker mode: invoked elevated (via UAC) to update the system PATH on the
-// primary installer's behalf. This keeps PATH elevation internal to one exe.
+func finishInstaller(failed bool) {
+	statusMutex.Lock()
+	errorText := installError
+	statusMutex.Unlock()
+	if failed {
+		installStatus = installFailed
+		setText(idcTitle, "Installation couldn't finish")
+		setText(idcDescription, "Review the error below, then retry or close the installer. No separate dialog is required.")
+		hideControls(idcSuccessHeading, idcSuccessBody, idcSuccessPath)
+		hideControls(idcProgress, idcProgressDetail, idcInstallPath)
+		showControls(idcProgressHeading, idcPercent, idcErrorDetail)
+		setText(idcProgressHeading, "Installation stopped")
+		setText(idcErrorDetail, errorText)
+		setText(idcBack, "Close")
+		setText(idcAction, "Retry")
+		setEnabled(idcBack, true)
+		setEnabled(idcAction, true)
+		return
+	}
+
+	installStatus = installDone
+	setText(idcTitle, "Installation complete")
+	setText(idcDescription, "say_less is ready to use on this computer.")
+	hideControls(idcProgressHeading, idcProgress, idcPercent, idcProgressDetail, idcInstallPath)
+	showControls(idcSuccessHeading, idcSuccessBody, idcSuccessPath)
+	if addToPath {
+		setText(idcSuccessBody, "The language compiler is ready to use. Open a new terminal to run sale --version.")
+	} else {
+		setText(idcSuccessBody, "The language compiler is ready to use. Run \""+filepath.Join(selectedDir, "bin", "sale.exe")+"\" --version from the installed folder.")
+	}
+	setText(idcSuccessPath, "Installed to: "+filepath.Join(selectedDir, "bin"))
+	setVisible(idcBack, false)
+	setText(idcAction, "Close")
+	setEnabled(idcAction, true)
+	procSetFocus.Call(uintptr(controls[idcAction]))
+}
+
 func workerMain() int {
 	if len(os.Args) < 3 || os.Args[1] != "--worker" {
 		return 1
@@ -774,26 +1411,29 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--worker" {
 		os.Exit(workerMain())
 	}
-
-	hm, _, _ := procGetModuleHandleW.Call(0)
-	hInstance = syscall.Handle(hm)
-
+	initializeDPI()
+	module, _, _ := procGetModuleHandleW.Call(0)
+	hInstance = syscall.Handle(module)
 	if err := registerClass(); err != nil {
-		procMessageBoxW.Call(0, uintptr(unsafe.Pointer(utf16("Failed to initialize installer: "+err.Error()))), uintptr(unsafe.Pointer(utf16("Say Less"))), 0x10)
+		procMessageBox.Call(0, uintptr(unsafe.Pointer(utf16("Failed to initialize installer: "+err.Error()))), uintptr(unsafe.Pointer(utf16("say_less"))), 0x10)
 		os.Exit(1)
 	}
 	if err := createWindow(); err != nil {
-		procMessageBoxW.Call(0, uintptr(unsafe.Pointer(utf16("Failed to open installer window: "+err.Error()))), uintptr(unsafe.Pointer(utf16("Say Less"))), 0x10)
+		procMessageBox.Call(0, uintptr(unsafe.Pointer(utf16("Failed to open installer window: "+err.Error()))), uintptr(unsafe.Pointer(utf16("say_less"))), 0x10)
 		os.Exit(1)
 	}
-
-	var m msg
+	var event message
 	for {
-		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
-		if r == 0 {
+		result, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&event)), 0, 0, 0)
+		if int32(result) == -1 {
 			break
 		}
-		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
-		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
+		if result == 0 {
+			break
+		}
+		procTranslateMessage.Call(uintptr(unsafe.Pointer(&event)))
+		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&event)))
 	}
 }
+
+var procMessageBox = user32.NewProc("MessageBoxW")
