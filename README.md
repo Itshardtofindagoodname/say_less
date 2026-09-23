@@ -8,12 +8,13 @@ A tiny, fast, general-purpose programming language.
 
 ### Option 1: Download a pre-built binary (recommended)
 
+No Go compiler required — every release ships pre-built executables, both in this repository and on the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
+
 Download the latest release for your platform from the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
 
 | Platform | File |
 |----------|------|
-| Windows (x64) installer | `say_less.exe` |
-| Windows (x64) | `sale-windows-amd64.zip` |
+| Windows (x64) — one installer exe | `say_less.exe` |
 | macOS (Intel) | `sale-macos-amd64.tar.gz` |
 | macOS (Apple Silicon) | `sale-macos-arm64.tar.gz` |
 | Linux (x64) | `sale-linux-amd64.tar.gz` |
@@ -23,10 +24,12 @@ Each release zip includes an installer script.
 
 #### Windows — GUI installer (recommended)
 
-1. Download **`say_less.exe`** from the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
+On Windows you don't even need to build anything: grab **`say_less.exe`** from the repository root or the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
+
+1. Take **`say_less.exe`** (in this repo's root, or from [Releases](https://github.com/Itshardtofindagoodname/say_less/releases)).
 2. Double-click **`say_less.exe`**.
 3. A setup window opens, just like the Python installer. Keep **Add `sale` to your PATH** checked (recommended) and click **Install**.
-4. The installer copies `sale.exe` to your chosen location and adds it to your PATH automatically.
+4. The installer copies `sale.exe` to your chosen location. If adding to the system PATH, Windows asks for administrator permission once (UAC) — accept it, and `sale` is added to your PATH automatically.
 5. Open a new terminal and verify:
 
 ```powershell

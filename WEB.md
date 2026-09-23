@@ -52,12 +52,11 @@ The language is implemented in Go with **zero external dependencies**. It compil
 
 ### Pre-built Binaries
 
-Download from the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page:
+Download from the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page — or just take the pre-built `.exe` right out of this repository's root. No Go compiler required.
 
 | Platform | File |
 |----------|------|
-| Windows (x64) installer | `say_less.exe` |
-| Windows (x64) | `sale-windows-amd64.zip` |
+| Windows (x64) — one installer exe | `say_less.exe` |
 | macOS (Intel) | `sale-macos-amd64.tar.gz` |
 | macOS (Apple Silicon) | `sale-macos-arm64.tar.gz` |
 | Linux (x64) | `sale-linux-amd64.tar.gz` |
@@ -65,10 +64,12 @@ Download from the [Releases](https://github.com/Itshardtofindagoodname/say_less/
 
 #### Windows — GUI installer (recommended)
 
-1. Download **`say_less.exe`** from the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
+On Windows just grab **`say_less.exe`** from the repository root or the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
+
+1. Download **`say_less.exe`** (in this repo's root, or from [Releases](https://github.com/Itshardtofindagoodname/say_less/releases)).
 2. Double-click **`say_less.exe`**.
 3. A setup window opens (same style as the Python installer). Keep **Add `sale` to your PATH** checked and click **Install**.
-4. The installer copies `sale.exe` to your chosen location and adds it to your PATH automatically.
+4. The installer copies `sale.exe` to your chosen location. If adding to the system PATH, Windows asks for administrator permission once (UAC) — accept it, and `sale` is added to your PATH automatically.
 5. Open a new terminal and verify:
 
 ```powershell
@@ -76,7 +77,7 @@ sale --version
 # sale 0.1.0
 ```
 
-#### Windows — zip + install.bat
+#### Windows — zip + install.bat (optional)
 
 1. Extract the zip file.
 2. Right-click `install.bat` and select **Run as administrator**.
@@ -134,7 +135,7 @@ $env:PATH += ";C:\path\to\your\binary"
 
 Run `build.bat` to build for all platforms. Binaries go to `dist/`:
 
-- `say_less.exe` (Windows GUI installer — embeds `sale.exe`, adds it to PATH)
+- `say_less.exe` (the one Windows installer — embeds `sale.exe`, requests admin via UAC only when updating PATH)
 - `sale-windows-amd64.zip`
 - `sale-macos-amd64.tar.gz`
 - `sale-macos-arm64.tar.gz`

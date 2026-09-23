@@ -50,6 +50,11 @@ const (
 
 	btnClicked = 0
 	swShow     = 1
+	swHidden   = 0
+
+	seeMaskNocloseprocess = 0x00000040
+	tokenQuery            = 0x0008
+	tokenElevation        = 20
 )
 
 // Control identifiers
@@ -70,11 +75,15 @@ const (
 // Registry constants
 const (
 	hKEYCurrentUser   = 0x80000001
+	hKEYLocalMachine  = 0x80000002
 	kEYRead           = 0x00020019
 	kEYWrite          = 0x00020006
 	rEGExpandSz       = uint32(2)
-	eRRorFileNotFound = 2
+	eRRorFileNotFound = syscall.Errno(2)
 )
+
+// System PATH registry key
+const environmentKey = `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`
 
 type wndClassEx struct {
 	CbSize, Style uint32
@@ -122,6 +131,23 @@ type initCommonControlsEx struct {
 	DwICC  uint32
 }
 
+type shellExecuteInfo struct {
+	CbSize, FMask uint32
+	HWnd          uintptr
+	LpVerb        *uint16
+	LpFile        *uint16
+	LpParameters  *uint16
+	LpDirectory   *uint16
+	NShow         int32
+	HInstApp      uintptr
+	LpIDList      uintptr
+	LpClass       *uint16
+	HKeyClass     uintptr
+	DHotKey       uint32
+	HMonitor      uintptr
+	HProcess      uintptr
+}
+
 var (
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	user32   = syscall.NewLazyDLL("user32.dll")
@@ -154,6 +180,13 @@ var (
 	procGetSysColorBrush     = user32.NewProc("GetSysColorBrush")
 	procSendMessageTimeoutW  = user32.NewProc("SendMessageTimeoutW")
 
+	procShellExecuteExW = shell32.NewProc("ShellExecuteExW")
+
+	procCloseHandle         = kernel32.NewProc("CloseHandle")
+	procWaitForSingleObject = kernel32.NewProc("WaitForSingleObject")
+	procGetExitCodeProcess  = kernel32.NewProc("GetExitCodeProcess")
+	procGetCurrentProcess   = kernel32.NewProc("GetCurrentProcess")
+
 	procCreateSolidBrush    = gdi32.NewProc("CreateSolidBrush")
 	procGetStockObject      = gdi32.NewProc("GetStockObject")
 	procSetTextColor        = gdi32.NewProc("SetTextColor")
@@ -165,10 +198,12 @@ var (
 	procSHGetPathFromIDListW = shell32.NewProc("SHGetPathFromIDListW")
 	procCoTaskMemFree        = ole32.NewProc("CoTaskMemFree")
 
-	procRegOpenKeyExW    = advapi32.NewProc("RegOpenKeyExW")
-	procRegQueryValueExW = advapi32.NewProc("RegQueryValueExW")
-	procRegSetValueExW   = advapi32.NewProc("RegSetValueExW")
-	procRegCloseKey      = advapi32.NewProc("RegCloseKey")
+	procRegOpenKeyExW       = advapi32.NewProc("RegOpenKeyExW")
+	procRegQueryValueExW    = advapi32.NewProc("RegQueryValueExW")
+	procRegSetValueExW      = advapi32.NewProc("RegSetValueExW")
+	procRegCloseKey         = advapi32.NewProc("RegCloseKey")
+	procOpenProcessToken    = advapi32.NewProc("OpenProcessToken")
+	procGetTokenInformation = advapi32.NewProc("GetTokenInformation")
 )
 
 var (
@@ -218,7 +253,7 @@ func wndProc(hwnd syscall.Handle, message uint32, wParam, lParam uintptr) uintpt
 		}
 		return 0
 	case wmCtlColorStatic, wmCtlColorBtn:
-		return colorHandler(hwnd, lParam)
+		return colorHandler(uintptr(hwnd), lParam)
 	case wmRefresh:
 		return refreshHandler(hwnd, wParam)
 	case wmFinish:
@@ -360,6 +395,56 @@ func getCheck(id int) uintptr {
 	return r
 }
 
+func isElevated() bool {
+	// TOKEN_QUERY | GetTokenInformation(TokenElevation)
+	tokenQuery := uint32(0x0008)
+	tokenElevation := uint32(20)
+	curProc, _, _ := procGetCurrentProcess.Call()
+	var tok syscall.Handle
+	if r, _, _ := procOpenProcessToken.Call(curProc, uintptr(tokenQuery), uintptr(unsafe.Pointer(&tok))); r == 0 {
+		return false
+	}
+	defer procCloseHandle.Call(uintptr(tok))
+	var elev uint32
+	var sz uint32
+	if r, _, _ := procGetTokenInformation.Call(uintptr(tok), uintptr(tokenElevation), uintptr(unsafe.Pointer(&elev)), 4, uintptr(unsafe.Pointer(&sz))); r == 0 {
+		return false
+	}
+	return elev != 0
+}
+
+// runElevatedPath relaunches this same exe as administrator with --worker so it
+// can update the SYSTEM PATH. Returns true if the elevated copy succeeded.
+func runElevatedPath(binDir string) bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	params := "--worker \"" + binDir + "\""
+
+	var sei shellExecuteInfo
+	sei.CbSize = uint32(unsafe.Sizeof(sei))
+	sei.FMask = 0x00000040 // SEE_MASK_NOCLOSEPROCESS (keeps us a handle to wait on)
+	sei.HWnd = uintptr(mainHwnd)
+	sei.LpVerb = utf16("runas")
+	sei.LpFile = utf16(exe)
+	sei.LpParameters = utf16(params)
+	sei.NShow = swHidden
+
+	ok, _, _ := procShellExecuteExW.Call(uintptr(unsafe.Pointer(&sei)))
+	if ok == 0 {
+		return false
+	}
+	if sei.HProcess == 0 {
+		return false
+	}
+	procWaitForSingleObject.Call(sei.HProcess, 300000)
+	var code uint32
+	procGetExitCodeProcess.Call(sei.HProcess, uintptr(unsafe.Pointer(&code)))
+	procCloseHandle.Call(sei.HProcess)
+	return code == 0
+}
+
 func defaultInstallDir() string {
 	base := os.Getenv("LOCALAPPDATA")
 	if base == "" {
@@ -396,11 +481,25 @@ func runInstall(installDir string, addPath bool) {
 	}
 
 	if addPath {
-		postProgress(60, "Adding "+binDir+" to your PATH...")
-		if err := addDirToUserPath(binDir); err != nil {
-			postProgress(0, "Error: "+err.Error())
-			procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 1, 0)
-			return
+		postProgress(60, "Adding "+binDir+" to your system PATH...")
+		if isElevated() {
+			if err := addDirToSystemPath(binDir); err != nil {
+				postProgress(0, "Error: "+err.Error())
+				procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 1, 0)
+				return
+			}
+		} else {
+			postProgress(60, "Requesting administrator permission to update your PATH...")
+			if runElevatedPath(binDir) {
+				postProgress(80, "PATH updated by an elevated Say Less copy.")
+			} else {
+				postProgress(80, "Admin prompt declined — adding to your personal PATH instead.")
+				if err := addDirToUserPath(binDir); err != nil {
+					postProgress(0, "Error: "+err.Error())
+					procPostMessageW.Call(uintptr(mainHwnd), wmFinish, 1, 0)
+					return
+				}
+			}
 		}
 	}
 
@@ -423,12 +522,24 @@ func resolvePayload() ([]byte, error) {
 }
 
 func addDirToUserPath(dir string) error {
-	k, err := regOpen("Environment", kEYRead|kEYWrite)
+	k, err := regOpen(hKEYCurrentUser, "Environment", kEYRead|kEYWrite)
 	if err != nil {
 		return err
 	}
 	defer procRegCloseKey.Call(k)
+	return appendToPath(k, dir)
+}
 
+func addDirToSystemPath(dir string) error {
+	k, err := regOpen(hKEYLocalMachine, environmentKey, kEYRead|kEYWrite)
+	if err != nil {
+		return err
+	}
+	defer procRegCloseKey.Call(k)
+	return appendToPath(k, dir)
+}
+
+func appendToPath(k uintptr, dir string) error {
 	cur, err := regQuery(k, "Path")
 	if err == eRRorFileNotFound {
 		cur = ""
@@ -469,10 +580,10 @@ func pathInList(list, dir string) bool {
 	return false
 }
 
-func regOpen(subkey string, access uint32) (uintptr, error) {
+func regOpen(root uintptr, subkey string, access uint32) (uintptr, error) {
 	var k uintptr
 	r, _, _ := procRegOpenKeyExW.Call(
-		uintptr(hKEYCurrentUser),
+		root,
 		uintptr(unsafe.Pointer(utf16(subkey))),
 		0,
 		uintptr(access),
@@ -492,7 +603,7 @@ func regQuery(k uintptr, name string) (string, error) {
 		0, 0, 0,
 		uintptr(unsafe.Pointer(&size)),
 	)
-	if r == eRRorFileNotFound {
+	if r == uintptr(eRRorFileNotFound) {
 		return "", eRRorFileNotFound
 	}
 	if r != 0 {
@@ -513,7 +624,7 @@ func regQuery(k uintptr, name string) (string, error) {
 }
 
 func regSet(k uintptr, name, value string) error {
-	u := syscall.UTF16FromString(value)
+	u, _ := syscall.UTF16FromString(value)
 	data := make([]byte, len(u)*2)
 	for i, c := range u {
 		data[i*2] = byte(c)
@@ -523,7 +634,7 @@ func regSet(k uintptr, name, value string) error {
 		k,
 		uintptr(unsafe.Pointer(utf16(name))),
 		0,
-		rEGExpandSz,
+		uintptr(rEGExpandSz),
 		uintptr(unsafe.Pointer(&data[0])),
 		uintptr(len(data)),
 	)
@@ -542,9 +653,12 @@ func registerClass() error {
 	wc.CbSize = uint32(unsafe.Sizeof(wc))
 	wc.LpfnWndProc = syscall.NewCallback(wndProc)
 	wc.HInstance = hInstance
-	wc.HIcon, _, _ = procLoadIconW.Call(0, 32512)     // IDI_APPLICATION
-	wc.HCursor, _, _ = procLoadCursorW.Call(0, 32512) // IDC_ARROW
-	wc.HbrBackground, _, _ = procGetSysColorBrush.Call(15)
+	hIcon, _, _ := procLoadIconW.Call(0, 32512)     // IDI_APPLICATION
+	hCursor, _, _ := procLoadCursorW.Call(0, 32512) // IDC_ARROW
+	brush, _, _ := procGetSysColorBrush.Call(15)    // COLOR_BTNFACE
+	wc.HIcon = syscall.Handle(hIcon)
+	wc.HCursor = syscall.Handle(hCursor)
+	wc.HbrBackground = syscall.Handle(brush)
 	wc.LpszClassName = className
 	r, _, _ := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 	if r == 0 {
@@ -572,9 +686,11 @@ func createWindow() error {
 	}
 	mainHwnd = syscall.Handle(h)
 
-	classFont, _, _ = procGetStockObject.Call(17) // DEFAULT_GUI_FONT
+	classFontH, _, _ := procGetStockObject.Call(17) // DEFAULT_GUI_FONT
+	classFont = syscall.Handle(classFontH)
 	titleFont = createTitleFont()
-	bannerBrush, _, _ = procCreateSolidBrush.Call(0x00FF1C58) // Say Less purple RGB(88,28,255)
+	bannerBrushH, _, _ := procCreateSolidBrush.Call(0x00FF1C58) // Say Less purple RGB(88,28,255)
+	bannerBrush = syscall.Handle(bannerBrushH)
 
 	createControls()
 
@@ -642,7 +758,23 @@ func createControls() {
 	newControl(idcCancel, "BUTTON", "Cancel", bsPushButton|wsTabstop, 436, 320, 88, 28, 0)
 }
 
+// Worker mode: invoked elevated (via UAC) to update the system PATH on the
+// primary installer's behalf. This keeps PATH elevation internal to one exe.
+func workerMain() int {
+	if len(os.Args) < 3 || os.Args[1] != "--worker" {
+		return 1
+	}
+	if err := addDirToSystemPath(os.Args[2]); err != nil {
+		return 1
+	}
+	return 0
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--worker" {
+		os.Exit(workerMain())
+	}
+
 	hm, _, _ := procGetModuleHandleW.Call(0)
 	hInstance = syscall.Handle(hm)
 

@@ -21,6 +21,9 @@ if %errorlevel% neq 0 (
 del cmd\installer\sale.exe
 echo say_less.exe built successfully
 
+echo Syncing installer into the repository root...
+copy /Y dist\say_less.exe say_less.exe >nul
+
 set GOOS=darwin
 set GOARCH=amd64
 echo Building macOS amd64...
