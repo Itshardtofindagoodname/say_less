@@ -17,6 +17,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
+copy /Y dist\sale-windows-amd64.exe sale.exe >nul
+if errorlevel 1 (
+    echo Failed to copy sale.exe beside install.bat
+    exit /b 1
+)
+
 set GOOS=darwin
 set GOARCH=amd64
 echo Building macOS amd64...
