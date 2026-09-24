@@ -7,12 +7,6 @@ release/
 *.test
 *.out
 
-# Shipped Windows installer at repo root (users without Go just run this)
-!say_less.exe
-
-# Installer bundle payload (generated at release time)
-cmd/installer/sale.exe
-
 # Go
 *.prof
 

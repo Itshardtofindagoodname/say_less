@@ -1,44 +1,53 @@
 @echo off
+setlocal EnableExtensions
+title Say Less Installer
+
 echo ================================
-echo  Say Less Language Installer
+echo  Say Less Windows Installer
 echo ================================
 echo.
 
-REM Check if running as administrator
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo This installer requires administrator privileges.
-    echo Please right-click and select "Run as administrator".
+set "SOURCE=%~dp0sale.exe"
+set "INSTALL_DIR=%LOCALAPPDATA%\Programs\SayLess"
+set "BIN_DIR=%INSTALL_DIR%\bin"
+set "TARGET=%BIN_DIR%\sale.exe"
+
+if not exist "%SOURCE%" (
+    echo sale.exe was not found beside install.bat.
+    echo Extract the complete Windows release zip before running this script.
     echo.
     pause
     exit /b 1
 )
 
-set INSTALL_DIR=%ProgramFiles%\SayLess
-set BIN_DIR=%INSTALL_DIR%\bin
-
-echo Installing Say Less to %INSTALL_DIR%...
+echo Installing for the current user to:
+echo   %BIN_DIR%
 echo.
 
-REM Create installation directory
-if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
-
-REM Copy the binary
-echo Copying sale.exe...
-copy /Y "%~dp0sale.exe" "%BIN_DIR%\sale.exe" >nul
-if %errorlevel% neq 0 (
-    echo Failed to copy sale.exe
+if errorlevel 1 (
+    echo Failed to create the installation folder.
     pause
     exit /b 1
 )
 
-REM Add to PATH
-echo Adding to PATH...
-setx PATH "%PATH%;%BIN_DIR%" /M >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Warning: Could not add to system PATH automatically.
-    echo Please add %BIN_DIR% to your PATH manually.
+copy /Y "%SOURCE%" "%TARGET%" >nul
+if errorlevel 1 (
+    echo Failed to copy sale.exe.
+    pause
+    exit /b 1
+)
+
+echo Adding Say Less to your user PATH...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$bin = Join-Path $env:LOCALAPPDATA 'Programs\SayLess\bin'; $path = [Environment]::GetEnvironmentVariable('Path', 'User'); $entries = @($path -split ';' ^| Where-Object { $_ }); if ($entries -notcontains $bin) { [Environment]::SetEnvironmentVariable('Path', (($entries + $bin) -join ';'), 'User') }" >nul
+if errorlevel 1 (
+    echo.
+    echo sale.exe was installed, but PATH could not be updated automatically.
+    echo Add this folder to your user PATH manually:
+    echo   %BIN_DIR%
+    echo.
+    pause
+    exit /b 1
 )
 
 echo.
@@ -46,16 +55,7 @@ echo ================================
 echo  Installation Complete!
 echo ================================
 echo.
-echo You can now use 'sale' from any terminal.
-echo.
-echo Quick start:
-echo   sale new my-project
-echo   cd my-project
-echo   sale run src/main.sl
-echo.
-echo For web projects:
-echo   sale create --web my-web-app
-echo   cd my-web-app
-echo   sale dev
+echo Open a new terminal, then run:
+echo   sale --version
 echo.
 pause

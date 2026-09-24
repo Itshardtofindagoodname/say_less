@@ -194,17 +194,77 @@ func buildWebProgram(program *parser.Program) error {
 	}
 
 	// Create build directory
-	os.MkdirAll("build/web", 0755)
+	if err := os.MkdirAll("build/web", 0755); err != nil {
+		return fmt.Errorf("create web build directory: %w", err)
+	}
 
 	// Write output files
-	writeFile("build/web/index.html", output.HTML)
+	if err := writeFile("build/web/index.html", output.HTML); err != nil {
+		return err
+	}
 	if output.CSS != "" {
-		writeFile("build/web/styles.css", output.CSS)
+		if err := writeFile("build/web/styles.css", output.CSS); err != nil {
+			return err
+		}
 	}
 	if output.JS != "" {
-		writeFile("build/web/runtime.js", output.JS)
+		if err := writeFile("build/web/runtime.js", output.JS); err != nil {
+			return err
+		}
+	}
+
+	// Keep project assets beside the generated page so the same output works
+	// from the dev server, a static host, or an embedded WebView.
+	for _, asset := range []struct {
+		source string
+		target string
+	}{
+		{source: "public", target: "build/web/public"},
+		{source: filepath.Join("src", "styles"), target: "build/web/styles"},
+	} {
+		if err := copyDirectoryIfPresent(asset.source, asset.target); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func copyDirectoryIfPresent(source, target string) error {
+	info, err := os.Stat(source)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect asset directory %q: %w", source, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("asset path %q is not a directory", source)
+	}
+
+	return filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		destination := filepath.Join(target, relative)
+		if info.IsDir() {
+			return os.MkdirAll(destination, 0755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read asset %q: %w", path, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(destination, data, info.Mode().Perm()); err != nil {
+			return fmt.Errorf("write asset %q: %w", destination, err)
+		}
+		return nil
+	})
 }
 
 func hasFlag(args []string, name string) bool {
@@ -827,10 +887,15 @@ func cmdDoctor() {
 	fmt.Println("Everything looks good!")
 }
 
-func writeFile(path, content string) {
+func writeFile(path, content string) error {
 	dir := filepath.Dir(path)
-	os.MkdirAll(dir, 0755)
-	os.WriteFile(path, []byte(content), 0644)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create directory for %q: %w", path, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return fmt.Errorf("write %q: %w", path, err)
+	}
+	return nil
 }
 
 func findMainFile() string {
@@ -917,7 +982,7 @@ func writeSaleToml(config map[string]string) {
 	sb.WriteString("version = \"0.1.0\"\n\n")
 	if len(config) > 0 {
 		sb.WriteString("[dependencies]\n")
-	for pkg, ver := range config {
+		for pkg, ver := range config {
 			sb.WriteString(fmt.Sprintf("%s = \"%s\"\n", pkg, ver))
 		}
 	}

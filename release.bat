@@ -17,7 +17,6 @@ REM Windows release
 echo Packaging Windows release...
 mkdir release\sale-windows-amd64 2>nul
 copy dist\sale-windows-amd64.exe release\sale-windows-amd64\sale.exe >nul
-copy dist\say_less.exe release\sale-windows-amd64\say_less.exe >nul
 copy install.bat release\sale-windows-amd64\install.bat >nul
 copy README.md release\sale-windows-amd64\README.md >nul
 cd release
@@ -32,8 +31,7 @@ copy dist\sale-macos-amd64 release\sale-macos-amd64\sale >nul
 copy install.sh release\sale-macos-amd64\install.sh >nul
 copy README.md release\sale-macos-amd64\README.md >nul
 cd release
-tar -cf sale-macos-amd64.tar sale-macos-amd64
-gzip sale-macos-amd64.tar
+tar -czf sale-macos-amd64.tar.gz sale-macos-amd64
 cd ..
 rmdir /s /q release\sale-macos-amd64
 
@@ -44,8 +42,7 @@ copy dist\sale-macos-arm64 release\sale-macos-arm64\sale >nul
 copy install.sh release\sale-macos-arm64\install.sh >nul
 copy README.md release\sale-macos-arm64\README.md >nul
 cd release
-tar -cf sale-macos-arm64.tar sale-macos-arm64
-gzip sale-macos-arm64.tar
+tar -czf sale-macos-arm64.tar.gz sale-macos-arm64
 cd ..
 rmdir /s /q release\sale-macos-arm64
 
@@ -56,8 +53,7 @@ copy dist\sale-linux-amd64 release\sale-linux-amd64\sale >nul
 copy install.sh release\sale-linux-amd64\install.sh >nul
 copy README.md release\sale-linux-amd64\README.md >nul
 cd release
-tar -cf sale-linux-amd64.tar sale-linux-amd64
-gzip sale-linux-amd64.tar
+tar -czf sale-linux-amd64.tar.gz sale-linux-amd64
 cd ..
 rmdir /s /q release\sale-linux-amd64
 

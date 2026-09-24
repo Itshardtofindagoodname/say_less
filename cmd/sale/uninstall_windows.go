@@ -12,7 +12,7 @@ import (
 	"unsafe"
 )
 
-// ---- Win32 declarations (same pattern as cmd/installer) ----
+// ---- Win32 declarations for the Windows CLI ----
 
 const (
 	hKEYLocalMachine = 0x80000002

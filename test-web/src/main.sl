@@ -29,12 +29,13 @@ get "/"
                 <h1 id="title">Say Less.</h1>
                 <p class="subtitle" id="subtitle">Build more. Write <span>less code</span>.</p>
                 <div class="cta-row" id="ctaRow">
-                    <a href="https://github.com/Itshardtofindagoodname/say_less/releases/latest/download/say_less.exe" class="cta-btn" id="cta">Download for Windows</a>
+                    <a href="https://github.com/Itshardtofindagoodname/say_less/releases/latest/download/sale-windows-amd64.zip" class="cta-btn" id="cta">Download for Windows</a>
                     <a href="https://github.com/Itshardtofindagoodname/say_less" class="cta-btn cta-btn-ghost" id="ctaGhost">Get Started</a>
                 </div>
             </div>
 
             <script>
+                if (typeof gsap !== "undefined") {
                 const tl = gsap.timeline({ defaults: { ease: "power3.out" } });
 
                 tl.fromTo("#glowLine", { scaleX: 0 }, { scaleX: 1, opacity: 1, duration: 1.2 })
@@ -78,6 +79,7 @@ get "/"
                 });
 
                 gsap.fromTo("#glowLine", { scaleX: 0, transformOrigin: "left" }, { scaleX: 1, opacity: 1, duration: 1.5, ease: "power2.inOut" });
+                }
             </script>
         </body>
         </html>

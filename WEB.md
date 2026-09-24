@@ -52,36 +52,27 @@ The language is implemented in Go with **zero external dependencies**. It compil
 
 ### Pre-built Binaries
 
-Download from the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page — or just take the pre-built `.exe` right out of this repository's root. No Go compiler required.
+Download the release archive for your platform from the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page. No Go compiler is required.
 
 | Platform | File |
 |----------|------|
-| Windows (x64) — one installer exe | `say_less.exe` |
+| Windows (x64) | `sale-windows-amd64.zip` |
 | macOS (Intel) | `sale-macos-amd64.tar.gz` |
 | macOS (Apple Silicon) | `sale-macos-arm64.tar.gz` |
 | Linux (x64) | `sale-linux-amd64.tar.gz` |
 | Linux (ARM64) | `sale-linux-arm64.tar.gz` |
 
-#### Windows — GUI installer (recommended)
+#### Windows — install.bat (recommended)
 
-On Windows just grab **`say_less.exe`** from the repository root or the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
-
-1. Download **`say_less.exe`** (in this repo's root, or from [Releases](https://github.com/Itshardtofindagoodname/say_less/releases)).
-2. Double-click **`say_less.exe`**.
-3. A setup window opens (same style as the Python installer). Keep **Add `sale` to your PATH** checked and click **Install**.
-4. The installer copies `sale.exe` to your chosen location. If adding to the system PATH, Windows asks for administrator permission once (UAC) — accept it, and `sale` is added to your PATH automatically.
-5. Open a new terminal and verify:
+1. Download and extract `sale-windows-amd64.zip`.
+2. Double-click `install.bat`.
+3. It installs `sale.exe` to `%LOCALAPPDATA%\Programs\SayLess\bin` and adds that folder to your **user** PATH. Administrator permission is not required.
+4. Open a new terminal and verify:
 
 ```powershell
 sale --version
 # sale 0.1.0
 ```
-
-#### Windows — zip + install.bat (optional)
-
-1. Extract the zip file.
-2. Right-click `install.bat` and select **Run as administrator**.
-3. The installer copies `sale.exe` to `C:\Program Files\SayLess\bin\` and adds it to your system PATH.
 
 #### macOS / Linux
 
@@ -135,14 +126,13 @@ $env:PATH += ";C:\path\to\your\binary"
 
 Run `build.bat` to build for all platforms. Binaries go to `dist/`:
 
-- `say_less.exe` (the one Windows installer — embeds `sale.exe`, requests admin via UAC only when updating PATH)
-- `sale-windows-amd64.zip`
-- `sale-macos-amd64.tar.gz`
-- `sale-macos-arm64.tar.gz`
-- `sale-linux-amd64.tar.gz`
-- `sale-linux-arm64.tar.gz`
+- `sale-windows-amd64.exe`
+- `sale-macos-amd64`
+- `sale-macos-arm64`
+- `sale-linux-amd64`
+- `sale-linux-arm64`
 
-`release.bat` packages everything (including `say_less.exe` for Windows) into the final archives.
+`release.bat` packages the Windows CLI binary with `install.bat` into the final archive.
 
 ---
 
@@ -1477,7 +1467,6 @@ docker compose up --build
 
 `release.bat` builds for all platforms and packages into archives:
 
-- `say_less.exe` (Windows GUI installer — recommended for Windows users)
 - `sale-windows-amd64.zip`
 - `sale-macos-amd64.tar.gz`
 - `sale-macos-arm64.tar.gz`

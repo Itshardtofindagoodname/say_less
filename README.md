@@ -8,40 +8,31 @@ A tiny, fast, general-purpose programming language.
 
 ### Option 1: Download a pre-built binary (recommended)
 
-No Go compiler required — every release ships pre-built executables, both in this repository and on the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
+No Go compiler is required — every release ships pre-built binaries on the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
 
 Download the latest release for your platform from the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
 
 | Platform | File |
 |----------|------|
-| Windows (x64) — one installer exe | `say_less.exe` |
+| Windows (x64) | `sale-windows-amd64.zip` |
 | macOS (Intel) | `sale-macos-amd64.tar.gz` |
 | macOS (Apple Silicon) | `sale-macos-arm64.tar.gz` |
 | Linux (x64) | `sale-linux-amd64.tar.gz` |
 | Linux (ARM64) | `sale-linux-arm64.tar.gz` |
 
-Each release zip includes an installer script.
+Each release archive includes the platform's installation script.
 
-#### Windows — GUI installer (recommended)
+#### Windows — install.bat (recommended)
 
-On Windows you don't even need to build anything: grab **`say_less.exe`** from the repository root or the [Releases](https://github.com/Itshardtofindagoodname/say_less/releases) page.
-
-1. Take **`say_less.exe`** (in this repo's root, or from [Releases](https://github.com/Itshardtofindagoodname/say_less/releases)).
-2. Double-click **`say_less.exe`**.
-3. A setup window opens, just like the Python installer. Keep **Add `sale` to your PATH** checked (recommended) and click **Install**.
-4. The installer copies `sale.exe` to your chosen location. If adding to the system PATH, Windows asks for administrator permission once (UAC) — accept it, and `sale` is added to your PATH automatically.
-5. Open a new terminal and verify:
+1. Download and extract `sale-windows-amd64.zip`.
+2. Double-click `install.bat`.
+3. It installs `sale.exe` to `%LOCALAPPDATA%\Programs\SayLess\bin` and adds that folder to your **user** PATH. Administrator permission is not required.
+4. Open a new terminal and verify:
 
 ```powershell
 sale --version
 # sale 0.1.0
 ```
-
-#### Windows — zip + install.bat
-
-1. Extract `sale-windows-amd64.zip`.
-2. Right-click `install.bat` and select **Run as administrator**.
-3. The installer copies `sale.exe` to `C:\Program Files\SayLess\bin\` and adds it to your system PATH.
 
 #### macOS / Linux
 
@@ -80,9 +71,8 @@ sale -g uninstall
 
 The command:
 
-- Deletes the install directory (`C:\Program Files\SayLess` and/or `%LOCALAPPDATA%\Programs\SayLess`)
-- Removes the Say Less `bin` folder from the system and user PATH
-- Asks for administrator permission (UAC) automatically when system-level changes are needed
+- Deletes the install directory (`%LOCALAPPDATA%\Programs\SayLess`)
+- Removes the Say Less `bin` folder from the user PATH
 - Deletes the running copy once the command finishes
 
 Then close and reopen the terminal and confirm the command is gone:
