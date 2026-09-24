@@ -82,9 +82,9 @@ func printUsage() {
 Usage: sale <command> [options]
 
 Core Commands:
-  run <file>          Run a Say Less file
+  run <file>          Run a Say Less file (live reload for web + backend)
   build [--release]   Build project (supports web compilation)
-dev [--port 8080]  Start dev server with live reload + auto-rebuild (web)
+  dev [--port 8080]   Start dev server with live reload (web + backend)
   test                Run tests
 
 Project Commands:
@@ -124,36 +124,8 @@ func cmdRun(args []string) {
 		os.Exit(1)
 	}
 	filename := args[0]
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", filename, err)
-		os.Exit(1)
-	}
-	runSource(string(data), filename)
-}
-
-func runSource(source string, filename string) {
-	program, err := parseSource(source, filename)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Check if this is a web program (has page or component declarations)
-	if isWebProgram(program) {
-		if err := buildWebProgram(program); err != nil {
-			fmt.Fprintf(os.Stderr, "Web compilation error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("Web build successful!")
-		fmt.Printf("Output: build/web/index.html\n")
-		return
-	}
-
-	interp := eval.New()
-	err = interp.Run(program)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Runtime error: %v\n", err)
+	if err := runLive(filename, 0); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -458,19 +430,18 @@ use json
 server on 8080
 
 get "/hello"
-    return json
-        message: "Hello from Say Less!"
+    return json {message: "Hello from Say Less!"}
 
 get "/users"
     users = [
-        {name: "Alice", age: 30}
-        {name: "Bob", age: 25}
+        {name: "Alice", age: 30},
+        {name: "Bob", age: 25},
     ]
     return json users
 
 post "/echo"
-    body = request.body
-    return json body
+    data = request.body
+    return json data
 `)
 	writeFile(filepath.Join(name, "sale.toml"), fmt.Sprintf(`name = "%s"
 version = "0.1.0"
@@ -578,7 +549,7 @@ func cmdBuild(args []string) {
 }
 
 func cmdDev(args []string) {
-	port := 8080
+	port := 0
 	if hasFlag(args, "--port") || hasFlag(args, "-p") {
 		if p, err := strconv.Atoi(flagValue(args, "--port")); err == nil {
 			port = p
@@ -607,28 +578,7 @@ func cmdDev(args []string) {
 		os.Exit(1)
 	}
 
-	rootDir := filepath.Dir(mainFile)
-	buildDir := filepath.Join("build", "web")
-
-	build := func() error {
-		program, err := parseFile(mainFile)
-		if err != nil {
-			return err
-		}
-		if !isWebProgram(program) {
-			return fmt.Errorf("no page or component declarations found in %s", mainFile)
-		}
-		return buildWebProgram(program)
-	}
-
-	if err := build(); err != nil {
-		fmt.Fprintf(os.Stderr, "Build error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Watching %s for changes...\n", rootDir)
-
-	server := web.NewDevServer(buildDir, rootDir, port, build)
-	if err := server.Run(); err != nil {
+	if err := runLive(mainFile, port); err != nil {
 		fmt.Fprintf(os.Stderr, "Dev server error: %v\n", err)
 		os.Exit(1)
 	}

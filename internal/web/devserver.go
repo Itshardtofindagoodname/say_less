@@ -118,13 +118,13 @@ func (s *DevServer) watchLoop() {
 }
 
 func (s *DevServer) rebuild() {
-	fmt.Println("[sale] Source changed, rebuilding...")
+	fmt.Println("[sale] Updating changes...")
 	if err := s.build(); err != nil {
-		fmt.Fprintf(os.Stderr, "[sale] Build failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[sale] Update failed: %v\n", err)
 		return
 	}
 	s.bump()
-	fmt.Println("[sale] Build successful.")
+	fmt.Println("[sale] Updated.")
 }
 
 // snapshot returns a signature of all .sl files under rootDir so the watcher

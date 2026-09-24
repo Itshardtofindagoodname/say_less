@@ -1,12 +1,16 @@
 package eval
 
 import (
+	"context"
 	"fmt"
+	"html"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"sayless/internal/parser"
 )
@@ -22,6 +26,7 @@ type Value struct {
 	None     bool
 	Fn       *Function
 	Callable *Builtin
+	Default  string
 	Return   *Value
 	Break    bool
 	Continue bool
@@ -89,20 +94,70 @@ func (e *Environment) Define(name string, val Value) {
 }
 
 type Interpreter struct {
-	stdout     *os.File
-	stderr     *os.File
-	routes     map[string]*Function
-	port       int
+	stdout      *os.File
+	stderr      *os.File
+	routes      map[string]*Function
+	port        int
+	forcePort   int
+	httpServer  *http.Server
+	liveReload  bool
+	revision    int
 	NpmPackages []string
 	PipPackages []string
 }
 
 func New() *Interpreter {
 	return &Interpreter{
-		stdout: os.Stdout,
-		stderr: os.Stderr,
-		routes: make(map[string]*Function),
-		port:   8080,
+		stdout:    os.Stdout,
+		stderr:    os.Stderr,
+		routes:    make(map[string]*Function),
+		port:      8080,
+		forcePort: 0,
+	}
+}
+
+// SetPort overrides the port declared by "server on <port>" in the program.
+// A value of 0 means the program's declared port is used.
+func (interp *Interpreter) SetPort(p int) {
+	interp.forcePort = p
+}
+
+// EnableLiveReload turns on dev-mode live reload. When enabled, HTML responses
+// get a reload script injected and plain-text/JSON responses are wrapped in a
+// small HTML page, so editing the source file reloads the browser
+// automatically. It is used by the backend live-reload runner.
+func (interp *Interpreter) EnableLiveReload(enabled bool) {
+	interp.liveReload = enabled
+}
+
+// SetRevision sets the revision advertised by the /__sale_reload endpoint. The
+// live-reload runner increments this each time it restarts the server so
+// browsers watching the page know to reload.
+func (interp *Interpreter) SetRevision(revision int) {
+	interp.revision = revision
+}
+
+// hasRoute reports whether any registered user route serves the given path.
+func (interp *Interpreter) hasRoute(path string) bool {
+	suffix := " " + path
+	for key := range interp.routes {
+		if strings.HasSuffix(key, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// Shutdown stops the running HTTP server, releasing the port. It is safe to
+// call multiple times and is used by the live-reload runner to restart the
+// server with updated routes.
+func (interp *Interpreter) Shutdown() {
+	if interp.httpServer != nil {
+		srv := interp.httpServer
+		interp.httpServer = nil
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
 	}
 }
 
@@ -240,11 +295,15 @@ func (interp *Interpreter) exec(node parser.ASTNode, env *Environment) (Value, e
 		fmt.Fprintf(interp.stdout, "Route registered: %s %s\n", strings.ToUpper(n.Method), routeVal.Str)
 		return Value{Type: "none", None: true}, nil
 	case *parser.ServerDecl:
-		portVal, err := interp.eval(n.Port, env)
-		if err != nil {
-			return Value{}, err
+		if interp.forcePort > 0 {
+			interp.port = interp.forcePort
+		} else {
+			portVal, err := interp.eval(n.Port, env)
+			if err != nil {
+				return Value{}, err
+			}
+			interp.port = int(portVal.Int)
 		}
-		interp.port = int(portVal.Int)
 		return Value{Type: "none", None: true}, nil
 	}
 	return Value{Type: "none", None: true}, nil
@@ -402,6 +461,16 @@ func (interp *Interpreter) Fprintf(w *os.File, format string, args ...interface{
 func (interp *Interpreter) startServer() error {
 	mux := http.NewServeMux()
 
+	// Live-reload endpoint used by the injected reload script. Individual
+	// generated routes need a mux pattern to serve, but there is no real
+	// handler for this path in the language, so it is registered directly.
+	if interp.liveReload && !interp.hasRoute("/__sale_reload") {
+		mux.HandleFunc("/__sale_reload", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			fmt.Fprintf(w, "%d", interp.revision)
+		})
+	}
+
 	// Serve src/styles/
 	staticDir := filepath.Join("src", "styles")
 	if _, err := os.Stat(staticDir); err == nil {
@@ -505,9 +574,24 @@ func (interp *Interpreter) startServer() error {
 				return
 			}
 			reqEnv := NewEnv(capturedFn.Env)
+			bodyVal := Value{Type: "string", Str: ""}
+			if r.Body != nil {
+				if raw, err := io.ReadAll(r.Body); err == nil {
+					text := strings.TrimSpace(string(raw))
+					if text != "" {
+						jsonVal, jerr := jsonDecodeString(text)
+						if jerr != nil {
+							bodyVal = Value{Type: "string", Str: text}
+						} else {
+							bodyVal = jsonVal
+						}
+					}
+				}
+			}
 			reqEnv.Define("request", Value{Type: "map", Map: makeMap(map[string]Value{
 				"method": Value{Type: "string", Str: r.Method},
 				"path":   Value{Type: "string", Str: r.URL.Path},
+				"body":   bodyVal,
 			})})
 			result, err := interpRef.execBlock(capturedFn.Body, reqEnv)
 			if err != nil {
@@ -522,6 +606,10 @@ func (interp *Interpreter) startServer() error {
 			if len(interpRef.NpmPackages) > 0 && strings.Contains(body, "<html") {
 				body = interpRef.injectNpmScripts(body)
 			}
+			// In dev mode, make the response self-reloading in the browser.
+			if interpRef.liveReload {
+				body = interpRef.wrapForLiveReload(body)
+			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			fmt.Fprint(w, body)
 		})
@@ -529,7 +617,13 @@ func (interp *Interpreter) startServer() error {
 	addr := fmt.Sprintf(":%d", interp.port)
 	fmt.Fprintf(interp.stdout, "Server running on http://localhost%s\n", addr)
 	fmt.Fprintf(interp.stdout, "Press Ctrl+C to stop.\n")
-	return http.ListenAndServe(addr, mux)
+	srv := &http.Server{Addr: addr, Handler: mux}
+	interp.httpServer = srv
+	err := srv.ListenAndServe()
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
 }
 
 func (interp *Interpreter) injectNpmScripts(html string) string {
@@ -577,6 +671,42 @@ func (interp *Interpreter) injectNpmScripts(html string) string {
 	// Fallback: prepend
 	return scriptBlock + "\n" + html
 }
+
+// wrapForLiveReload makes a response auto-reload in the browser while running a
+// backend dev server. HTML responses get the reload script injected before
+// </body>; plain text and JSON responses (which cannot run scripts) are wrapped
+// in a minimal HTML page showing the raw content.
+func (interp *Interpreter) wrapForLiveReload(body string) string {
+	lower := strings.ToLower(body)
+	if strings.Contains(lower, "</body>") {
+		return strings.Replace(body, "</body>", liveReloadScript+"\n</body>", 1)
+	}
+	if strings.Contains(lower, "<html") {
+		return body + "\n" + liveReloadScript + "\n"
+	}
+	escaped := html.EscapeString(body)
+	return "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Say Less Response</title>\n</head>\n<body>\n<pre>" + escaped + "</pre>\n" + liveReloadScript + "\n</body>\n</html>"
+}
+
+// liveReloadScript polls the dev server for a new revision and reloads the page
+// when one is detected. It mirrors the script injected by the web dev server.
+const liveReloadScript = `<script>
+(function() {
+  var rev = 0;
+  function check() {
+    fetch('/__sale_reload', {cache: 'no-store'})
+      .then(function(r) { return r.text(); })
+      .then(function(t) {
+        var n = parseInt(t, 10) || 0;
+        if (rev === 0) { rev = n; return; }
+        if (n !== rev) { window.location.reload(); }
+      })
+      .catch(function() {});
+  }
+  check();
+  setInterval(check, 1000);
+})();
+</script>`
 
 func (interp *Interpreter) execIf(n *parser.If, env *Environment) (Value, error) {
 	cond, err := interp.eval(n.Cond, env)

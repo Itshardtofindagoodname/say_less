@@ -80,7 +80,7 @@ func (interp *Interpreter) registerBuiltins(env *Environment) {
 		"clock": {Type: "builtin", Callable: &Builtin{Name: "os.clock", Fn: builtinClock}},
 	})})
 
-	env.Define("json", Value{Type: "module", Map: makeMap(map[string]Value{
+	env.Define("json", Value{Type: "module", Default: "encode", Map: makeMap(map[string]Value{
 		"encode": {Type: "builtin", Callable: &Builtin{Name: "json.encode", Fn: builtinJSONEncode}},
 		"decode": {Type: "builtin", Callable: &Builtin{Name: "json.decode", Fn: builtinJSONDecode}},
 	})})

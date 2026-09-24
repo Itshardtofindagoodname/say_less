@@ -261,6 +261,14 @@ func (interp *Interpreter) evalCall(n *parser.Call, env *Environment) (Value, er
 		}
 		return Value{Type: "struct", Struct: &StructVal{Name: callee.Str, Fields: fields}}, nil
 	}
+	if callee.Type == "module" {
+		if callee.Default != "" && callee.Map != nil {
+			if member, ok := (*callee.Map)[callee.Default]; ok && member.Callable != nil {
+				return member.Callable.Fn(args), nil
+			}
+		}
+		return Value{}, fmt.Errorf("module %s cannot be called directly; use %s.<member>(...)", callee.Default, callee.Default)
+	}
 	return Value{}, fmt.Errorf("cannot call %s", callee.Type)
 }
 

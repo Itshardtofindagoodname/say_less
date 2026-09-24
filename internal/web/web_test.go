@@ -572,3 +572,34 @@ func TestCompilerConditionalRuntime(t *testing.T) {
 		t.Error("Expected showDetails state init in runtime JS")
 	}
 }
+
+func TestCompilerCounterInsideMain(t *testing.T) {
+	source := "page \"/\"\n    state count = 0\n    main\n        button \"Wow me\"\n            on click\n                count += 1\n        p \"Clicked: \" + count\n"
+	l := lexer.New(source, "test.sl")
+	tokens, err := l.Tokenize()
+	if err != nil {
+		t.Fatalf("Lexer error: %v", err)
+	}
+
+	p := parser.New(tokens)
+	program, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	compiler := NewCompiler()
+	output, err := compiler.Compile(program)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+
+	if !strings.Contains(output.HTML, "data-sl-expr") {
+		t.Errorf("Expected counter binding in HTML output:\n%s", output.HTML)
+	}
+	if !strings.Contains(output.HTML, "data-on-click") {
+		t.Error("Expected click handler on button")
+	}
+	if !strings.Contains(output.JS, `"count":0`) {
+		t.Error("Expected count state initialized to 0 in runtime JS")
+	}
+}
